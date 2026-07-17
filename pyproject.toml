@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "multipart-response"
 version = "0.1.0"
-description = "Build and stream multipart responses with adapters for Python web frameworks."
+description = "Stream one HTTP response as multiple parts. For FastAPI and Starlette."
 readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
