@@ -10,11 +10,12 @@ from starlette.background import BackgroundTask
 from starlette.testclient import TestClient
 from starlette.types import Receive, Scope, Send
 
-from multipart_response import MultipartPart
+from multipart_response import Multipart, MultipartPart
 from multipart_response.starlette import (
     HTMLMultipartResponse,
     HTMLPart,
     JSONPart,
+    Multipart as StarletteMultipart,
     MultipartResponse,
     Part,
     TextPart,
@@ -42,7 +43,9 @@ def response_boundary(content_type: str) -> bytes:
 def test_part_uses_starlette_rendering_and_headers() -> None:
     assert Part().body == b""
     assert Part(b"bytes").body == b"bytes"
-    assert bytes(Part(memoryview(b"view")).body) == b"view"
+    memoryview_body = Part(memoryview(b"view")).body
+    assert isinstance(memoryview_body, memoryview)
+    assert bytes(memoryview_body) == b"view"
     assert Part(bytearray(b"array")).body == b"array"
     assert Part("text", media_type="text/custom").body == b"text"
 
@@ -82,6 +85,112 @@ def test_part_convenience_classes() -> None:
 
     with pytest.raises(ValueError):
         JSONPart({"value": float("nan")})
+
+    assert JSONPart([1, 2, 3]).body == b"[1,2,3]"
+
+
+def test_starlette_reexports_core_multipart() -> None:
+    assert StarletteMultipart is Multipart
+
+
+def test_part_streams_sync_string_and_bytes_chunks() -> None:
+    consumed: list[str] = []
+
+    def body() -> Iterator[str | bytes | bytearray | memoryview]:
+        consumed.append("one")
+        yield "one"
+        consumed.append("two")
+        yield b"two"
+        consumed.append("three")
+        yield bytearray(b"three")
+        consumed.append("four")
+        yield memoryview(b"four")
+
+    part = Part(body(), media_type="text/plain")
+
+    assert part.raw_headers == [(b"content-type", b"text/plain; charset=utf-8")]
+
+    response = MultipartResponse([part], boundary="sync-body")
+    assert consumed == []
+
+    result = get_response(response)
+    parsed = parse_multipart(result.content, b"sync-body")[0]
+
+    assert "content-length" not in result.headers
+    assert parsed.headers == [(b"content-type", b"text/plain; charset=utf-8")]
+    assert parsed.body == b"onetwothreefour"
+    assert consumed == ["one", "two", "three", "four"]
+
+
+def test_adapter_streams_serialize_directly_through_core_multipart() -> None:
+    def body() -> Iterator[str]:
+        yield "one"
+        yield "two"
+
+    multipart = Multipart([Part(body(), media_type="text/plain")], boundary="direct")
+
+    assert parse_multipart(multipart.render(), b"direct")[0].body == b"onetwo"
+
+
+def test_async_adapter_stream_rejects_sync_rendering() -> None:
+    async def body() -> AsyncIterator[str]:
+        yield "body"
+
+    multipart = Multipart([HTMLPart(body())], boundary="async-direct")
+
+    with pytest.raises(TypeError, match="asynchronous body"):
+        multipart.render()
+
+
+def test_html_part_streams_async_string_chunks() -> None:
+    async def body() -> AsyncIterator[str]:
+        yield "<p>One</p>"
+        yield "<p>Two</p>"
+
+    part = HTMLPart(body())
+    response = MultipartResponse([part], boundary="async-body")
+    result = get_response(response)
+    parsed = parse_multipart(result.content, b"async-body")[0]
+
+    assert "content-length" not in result.headers
+    assert parsed.headers == [(b"content-type", b"text/html; charset=utf-8")]
+    assert parsed.body == b"<p>One</p><p>Two</p>"
+
+
+def test_streaming_part_preserves_explicit_content_length() -> None:
+    part = Part(
+        [b"one", b"two"],
+        headers={"Content-Length": "6"},
+        media_type="application/octet-stream",
+    )
+
+    response = MultipartResponse([part], boundary="known-length")
+    parsed = parse_multipart(get_response(response).content, b"known-length")[0]
+
+    assert parsed.headers == [
+        (b"content-length", b"6"),
+        (b"content-type", b"application/octet-stream"),
+    ]
+    assert parsed.body == b"onetwo"
+
+
+def test_invalid_sync_and_async_part_stream_chunks_are_rejected() -> None:
+    response = MultipartResponse(
+        [Part([b"valid", object()], media_type="application/octet-stream")],
+        boundary="invalid-sync",
+    )
+    with pytest.raises(TypeError, match="Part stream chunks must be str or bytes-like"):
+        get_response(response)
+
+    async def body() -> AsyncIterator[bytes]:
+        yield object()  # type: ignore[misc]
+
+    response = MultipartResponse(
+        [Part(body(), media_type="application/octet-stream")],
+        boundary="invalid-async",
+    )
+    with pytest.raises(TypeError, match="Part stream chunks must be str or bytes-like"):
+        get_response(response)
 
 
 def test_sequence_is_buffered_with_content_length() -> None:
@@ -146,7 +255,10 @@ def test_sequence_is_buffered_with_content_length() -> None:
 def test_multipart_response_requires_explicit_parts(item: object) -> None:
     with pytest.raises(
         TypeError,
-        match=rf"MultipartResponse items must be Part or MultipartPart; got {type(item).__name__}",
+        match=(
+            rf"MultipartResponse items must be Part, MultipartPart, or Multipart; "
+            rf"got {type(item).__name__}"
+        ),
     ):
         MultipartResponse([item])  # type: ignore[list-item]
 
@@ -276,6 +388,88 @@ def test_html_response_passes_explicit_parts_through_unchanged() -> None:
 def test_html_response_rejects_other_implicit_values(item: object) -> None:
     with pytest.raises(TypeError):
         HTMLMultipartResponse([item])  # type: ignore[list-item]
+
+
+def test_html_response_accepts_an_explicit_multipart() -> None:
+    nested = Multipart([TextPart("nested")], boundary="nested")
+    response = HTMLMultipartResponse([nested], boundary="html-outer")
+
+    part = parse_multipart(get_response(response).content, b"html-outer")[0]
+
+    assert part.headers[-1] == (b"content-type", b"multipart/mixed; boundary=nested")
+    assert parse_multipart(part.body, b"nested")[0].body == b"nested"
+
+
+def test_static_nested_multipart_is_buffered() -> None:
+    inner = Multipart(
+        [
+            TextPart("Plain text"),
+            HTMLPart("<p>HTML</p>"),
+        ],
+        subtype="alternative",
+        boundary="inner",
+    )
+    response = MultipartResponse([inner], boundary="outer")
+
+    result = get_response(response)
+    outer_part = parse_multipart(result.content, b"outer")[0]
+
+    assert result.headers["content-length"] == str(len(result.content))
+    assert outer_part.headers == [
+        (b"content-length", str(len(outer_part.body)).encode()),
+        (b"content-type", b"multipart/alternative; boundary=inner"),
+    ]
+    assert parse_multipart(outer_part.body, b"inner") == [
+        ParsedPart(
+            [
+                (b"content-length", b"10"),
+                (b"content-type", b"text/plain; charset=utf-8"),
+            ],
+            b"Plain text",
+        ),
+        ParsedPart(
+            [
+                (b"content-length", b"11"),
+                (b"content-type", b"text/html; charset=utf-8"),
+            ],
+            b"<p>HTML</p>",
+        ),
+    ]
+
+
+def test_streaming_nested_multipart_streams_outer_response() -> None:
+    async def body() -> AsyncIterator[str]:
+        yield "one"
+        yield "two"
+
+    inner = Multipart(
+        [Part(body(), media_type="text/plain")],
+        boundary="inner-stream",
+    )
+    response = MultipartResponse(
+        [Part(inner, headers={"Content-ID": "<nested>"})],
+        boundary="outer-stream",
+    )
+
+    result = get_response(response)
+    outer_part = parse_multipart(result.content, b"outer-stream")[0]
+
+    assert "content-length" not in result.headers
+    assert outer_part.headers == [
+        (b"content-id", b"<nested>"),
+        (b"content-type", b"multipart/mixed; boundary=inner-stream"),
+    ]
+    assert parse_multipart(outer_part.body, b"inner-stream")[0].body == b"onetwo"
+
+
+def test_part_rejects_conflicting_nested_media_type() -> None:
+    inner = Multipart([TextPart("body")], boundary="inner")
+
+    with pytest.raises(ValueError, match="does not match nested multipart"):
+        Part(inner, media_type="multipart/mixed; boundary=wrong")
+
+    with pytest.raises(ValueError, match="does not match nested multipart"):
+        Part(inner, headers={"Content-Type": "multipart/mixed; boundary=wrong"})
 
 
 def test_synchronous_iterable_streams_without_content_length() -> None:

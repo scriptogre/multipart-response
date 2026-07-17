@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from conftest import ParsedPart, parse_multipart
 
-from multipart_response import MultipartPart, MultipartWriter
+from multipart_response import Multipart, MultipartPart, MultipartWriter
 
 
 def test_render_exact_multipart_body() -> None:
@@ -208,3 +208,204 @@ def test_iterate_async_serializes_parts() -> None:
         return b"".join([bytes(chunk) async for chunk in writer.iterate_async(parts())])
 
     assert asyncio.run(collect()) == (b"--async\r\n\r\none\r\n--async\r\n\r\ntwo\r\n--async--\r\n")
+
+
+def test_sync_part_body_streams_chunks() -> None:
+    def body() -> Iterator[bytes | memoryview]:
+        yield b"one"
+        yield memoryview(b"two")
+
+    multipart = Multipart(
+        [MultipartPart(body(), [(b"Content-Type", b"application/octet-stream")])],
+        boundary="stream",
+    )
+
+    assert b"".join(multipart.iterate()) == (
+        b"--stream\r\nContent-Type: application/octet-stream\r\n\r\nonetwo\r\n--stream--\r\n"
+    )
+    assert not multipart.is_static
+
+
+def test_async_part_body_streams_chunks() -> None:
+    async def body() -> AsyncIterator[bytes | bytearray]:
+        yield b"one"
+        yield bytearray(b"two")
+
+    multipart = Multipart([MultipartPart(body())], boundary="async-body")
+
+    assert asyncio.run(multipart.render_async()) == (
+        b"--async-body\r\n\r\nonetwo\r\n--async-body--\r\n"
+    )
+    assert not multipart.is_static
+
+
+def test_async_serializer_accepts_sync_and_async_sources_at_every_level() -> None:
+    def sync_body() -> Iterator[bytes]:
+        yield b"sync"
+
+    async def async_body() -> AsyncIterator[bytes]:
+        yield b"async"
+
+    async def parts() -> AsyncIterator[MultipartPart]:
+        yield MultipartPart(sync_body())
+        yield MultipartPart(async_body())
+
+    multipart = Multipart(parts(), boundary="mixed-streams")
+
+    assert not multipart.is_static
+    assert asyncio.run(multipart.render_async()) == (
+        b"--mixed-streams\r\n\r\nsync\r\n--mixed-streams\r\n\r\nasync\r\n--mixed-streams--\r\n"
+    )
+
+
+def test_sync_serializer_rejects_async_sources() -> None:
+    async def body() -> AsyncIterator[bytes]:
+        yield b"body"
+
+    with pytest.raises(TypeError, match="asynchronous body"):
+        Multipart([MultipartPart(body())], boundary="sync-only").render()
+
+    async def parts() -> AsyncIterator[MultipartPart]:
+        yield MultipartPart(b"body")
+
+    with pytest.raises(TypeError, match="asynchronous part source"):
+        Multipart(parts(), boundary="sync-only").render()
+
+
+def test_invalid_stream_chunks_are_rejected() -> None:
+    multipart = Multipart(
+        [MultipartPart([b"valid", "invalid"])],  # type: ignore[list-item]
+        boundary="invalid-sync",
+    )
+
+    with pytest.raises(TypeError, match="body chunks must be bytes-like; got str"):
+        multipart.render()
+
+    async def body() -> AsyncIterator[bytes]:
+        yield "invalid"  # type: ignore[misc]
+
+    with pytest.raises(TypeError, match="body chunks must be bytes-like; got str"):
+        asyncio.run(Multipart([MultipartPart(body())], boundary="invalid-async").render_async())
+
+
+def test_multipart_entity_exposes_framing_values() -> None:
+    parts = [MultipartPart(b"body")]
+    multipart = Multipart(
+        parts,
+        subtype="alternative",
+        boundary="inner:boundary",
+    )
+
+    assert multipart.parts is parts
+    assert multipart.subtype == "alternative"
+    assert multipart.boundary == b"inner:boundary"
+    assert multipart.content_type == ('multipart/alternative; boundary="inner:boundary"')
+
+
+def test_static_multipart_entity_renders_and_converts_to_part() -> None:
+    multipart = Multipart(
+        [MultipartPart(b"one"), MultipartPart(b"two")],
+        boundary="static",
+    )
+
+    assert multipart.is_static
+    assert multipart.render() == (b"--static\r\n\r\none\r\n--static\r\n\r\ntwo\r\n--static--\r\n")
+    part = multipart.as_multipart_part()
+    assert part.body is multipart
+    assert part.headers == ((b"Content-Type", b"multipart/mixed; boundary=static"),)
+
+
+def test_nested_multipart_is_framed_recursively() -> None:
+    inner = Multipart(
+        [
+            MultipartPart(b"plain", [(b"Content-Type", b"text/plain")]),
+            MultipartPart(b"<p>HTML</p>", [(b"Content-Type", b"text/html")]),
+        ],
+        subtype="alternative",
+        boundary="inner",
+    )
+    outer = Multipart([inner], boundary="outer")
+
+    body = outer.render()
+    outer_part = parse_multipart(body, b"outer")[0]
+
+    assert outer_part.headers == [(b"Content-Type", b"multipart/alternative; boundary=inner")]
+    assert parse_multipart(outer_part.body, b"inner") == [
+        ParsedPart([(b"Content-Type", b"text/plain")], b"plain"),
+        ParsedPart([(b"Content-Type", b"text/html")], b"<p>HTML</p>"),
+    ]
+    assert outer.is_static
+
+
+def test_nested_multipart_can_have_part_headers() -> None:
+    inner = Multipart([MultipartPart(b"body")], boundary="inner")
+    outer = Multipart(
+        [MultipartPart(inner, [(b"Content-ID", b"<versions>")])],
+        boundary="outer",
+    )
+
+    part = parse_multipart(outer.render(), b"outer")[0]
+
+    assert part.headers == [
+        (b"Content-ID", b"<versions>"),
+        (b"Content-Type", b"multipart/mixed; boundary=inner"),
+    ]
+
+
+def test_conflicting_nested_content_type_is_rejected() -> None:
+    inner = Multipart([MultipartPart(b"body")], boundary="inner")
+
+    with pytest.raises(ValueError, match="does not match nested multipart"):
+        MultipartPart(
+            inner,
+            [(b"Content-Type", b"multipart/mixed; boundary=wrong")],
+        )
+
+
+def test_nested_streams_serialize_recursively() -> None:
+    async def body() -> AsyncIterator[bytes]:
+        yield b"one"
+        yield b"two"
+
+    inner = Multipart([MultipartPart(body())], boundary="inner")
+    outer = Multipart([inner], boundary="outer")
+
+    rendered = asyncio.run(outer.render_async())
+    outer_part = parse_multipart(rendered, b"outer")[0]
+
+    assert parse_multipart(outer_part.body, b"inner")[0].body == b"onetwo"
+    assert not inner.is_static
+    assert not outer.is_static
+
+
+def test_nested_boundary_prefix_collision_is_rejected() -> None:
+    inner = Multipart([MultipartPart(b"body")], boundary="outer-inner")
+    outer = Multipart([inner], boundary="outer")
+
+    with pytest.raises(ValueError, match="body contains the boundary"):
+        outer.render()
+
+
+def test_multipart_accepts_convertible_part_objects() -> None:
+    class ConvertiblePart:
+        def as_multipart_part(self) -> MultipartPart:
+            return MultipartPart(b"converted", [(b"X-Part", b"yes")])
+
+    multipart = Multipart([ConvertiblePart()], boundary="convertible")
+
+    assert parse_multipart(multipart.render(), b"convertible") == [
+        ParsedPart([(b"X-Part", b"yes")], b"converted")
+    ]
+
+
+def test_multipart_rejects_invalid_part_objects() -> None:
+    with pytest.raises(TypeError, match="Multipart items must be"):
+        Multipart([object()], boundary="invalid-part").render()  # type: ignore[list-item]
+
+
+def test_multipart_part_rejects_invalid_body_source() -> None:
+    with pytest.raises(TypeError, match="body must be bytes-like or a body stream"):
+        MultipartPart("body")  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="body must be bytes-like or a body stream"):
+        MultipartPart(123)  # type: ignore[arg-type]

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator, Sequence
 from secrets import token_hex
+from typing import Protocol, TypeAlias, runtime_checkable
 
 TOKEN_CHARS = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~"
 BOUNDARY_CHARS = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'()+_,-./:=? "
@@ -9,21 +10,136 @@ BOUNDARY_CHARS_NO_SPACE = BOUNDARY_CHARS.rstrip()
 HEADER_VALUE_CHARS = b"\t" + bytes(range(32, 127))
 
 
-class MultipartPart:
-    """A serialized body part with its MIME headers."""
+class Multipart:
+    """A multipart entity that can be rendered or nested inside another part."""
 
     def __init__(
         self,
-        body: bytes | bytearray | memoryview = b"",
+        parts: PartSource,
+        *,
+        subtype: str = "mixed",
+        boundary: bytes | str | None = None,
+    ) -> None:
+        writer = MultipartWriter(boundary)
+        self.parts = parts
+        self.subtype = subtype
+        self.boundary = writer.boundary
+        self.content_type = writer.content_type(subtype)
+
+    @property
+    def is_static(self) -> bool:
+        """Return whether all parts and bodies are available without consuming a stream."""
+        if not isinstance(self.parts, Sequence):
+            return False
+        return all(_coerce_part(part).is_static for part in self.parts)
+
+    def iterate(self) -> Iterator[bytes | memoryview]:
+        """Serialize a synchronous multipart entity."""
+        if isinstance(self.parts, AsyncIterable):
+            raise TypeError("Cannot synchronously serialize an asynchronous part source")
+
+        parts = (_coerce_part(part) for part in self.parts)
+        return MultipartWriter(self.boundary).iterate(parts)
+
+    async def iterate_async(self) -> AsyncIterator[bytes | memoryview]:
+        """Serialize a synchronous or asynchronous multipart entity."""
+        source_parts = self.parts
+        if isinstance(source_parts, AsyncIterable):
+
+            async def parts() -> AsyncIterator[MultipartPart]:
+                async for part in source_parts:
+                    yield _coerce_part(part)
+
+            source: Iterable[MultipartPart] | AsyncIterable[MultipartPart] = parts()
+        else:
+            source = (_coerce_part(part) for part in source_parts)
+
+        async for chunk in MultipartWriter(self.boundary).iterate_async(source):
+            yield chunk
+
+    def render(self) -> bytes:
+        """Buffer a synchronous multipart entity."""
+        return b"".join(self.iterate())
+
+    async def render_async(self) -> bytes:
+        """Buffer a synchronous or asynchronous multipart entity."""
+        body = bytearray()
+        async for chunk in self.iterate_async():
+            body.extend(chunk)
+        return bytes(body)
+
+    def as_multipart_part(self) -> MultipartPart:
+        """Wrap this entity for nesting inside another multipart entity."""
+        return MultipartPart(self)
+
+
+class MultipartPart:
+    """A body part with MIME headers and a static, streamed, or multipart body."""
+
+    def __init__(
+        self,
+        body: BodySource = b"",
         headers: Iterable[tuple[bytes, bytes]] = (),
     ) -> None:
         if isinstance(body, bytearray):
             body = bytes(body)
-        if not isinstance(body, bytes | memoryview):
-            raise TypeError(f"MultipartPart body must be bytes-like; got {type(body).__name__}")
+        if isinstance(body, str) or not isinstance(
+            body,
+            bytes | memoryview | Multipart | Iterable | AsyncIterable,
+        ):
+            raise TypeError(
+                f"MultipartPart body must be bytes-like or a body stream; got {type(body).__name__}"
+            )
+
+        raw_headers = tuple(headers)
+        if isinstance(body, Multipart):
+            expected = body.content_type.encode("ascii")
+            content_types = [
+                value for name, value in raw_headers if name.lower() == b"content-type"
+            ]
+            if content_types and content_types != [expected]:
+                raise ValueError("Content-Type does not match nested multipart boundary")
+            if not content_types:
+                raw_headers += ((b"Content-Type", expected),)
 
         self.body = body
-        self.headers = tuple(headers)
+        self.headers = raw_headers
+
+    @property
+    def is_static(self) -> bool:
+        """Return whether the body is static bytes or a static multipart entity."""
+        if isinstance(self.body, bytes | memoryview):
+            return True
+        if isinstance(self.body, Multipart):
+            return self.body.is_static
+        return False
+
+
+@runtime_checkable
+class SupportsMultipartPart(Protocol):
+    def as_multipart_part(self) -> MultipartPart: ...
+
+
+BodyChunk: TypeAlias = bytes | bytearray | memoryview
+BodySource: TypeAlias = BodyChunk | Iterable[BodyChunk] | AsyncIterable[BodyChunk] | Multipart
+PartInput: TypeAlias = MultipartPart | Multipart | SupportsMultipartPart
+PartSource: TypeAlias = Sequence[PartInput] | Iterable[PartInput] | AsyncIterable[PartInput]
+
+
+def _coerce_part(part: PartInput) -> MultipartPart:
+    if isinstance(part, MultipartPart):
+        return part
+    if isinstance(part, Multipart):
+        return part.as_multipart_part()
+    if isinstance(part, SupportsMultipartPart):
+        converted = part.as_multipart_part()
+        if isinstance(converted, MultipartPart):
+            return converted
+
+    raise TypeError(
+        "Multipart items must be MultipartPart, Multipart, or implement "
+        f"as_multipart_part(); got {type(part).__name__}"
+    )
 
 
 class MultipartWriter:
@@ -96,7 +212,7 @@ class MultipartWriter:
         self._body_tail = b"\r\n"
         return prefix + self.boundary + b"\r\n" + bytes(header_block) + b"\r\n"
 
-    def write_body(self, data: bytes | bytearray | memoryview) -> bytes | memoryview:
+    def write_body(self, data: BodyChunk) -> bytes | memoryview:
         """Validate and return a chunk of the current part body."""
         if not self._part_started:
             raise RuntimeError("Cannot write a body before starting a part")
@@ -130,23 +246,65 @@ class MultipartWriter:
         self._finalized = True
         return self._delimiter + b"--\r\n"
 
-    def iterate(self, parts: Iterable[MultipartPart]) -> Iterator[bytes | memoryview]:
+    def iterate_part(self, part: PartInput) -> Iterator[bytes | memoryview]:
+        """Serialize one synchronous part without closing the multipart entity."""
+        serialized = _coerce_part(part)
+        yield self.start_part(serialized.headers)
+
+        body = serialized.body
+        if isinstance(body, bytes | bytearray | memoryview):
+            yield self.write_body(body)
+        elif isinstance(body, Multipart):
+            for nested_chunk in body.iterate():
+                yield self.write_body(nested_chunk)
+        elif isinstance(body, Iterable):
+            for body_chunk in body:
+                yield self.write_body(body_chunk)
+        else:
+            raise TypeError("Cannot synchronously serialize an asynchronous body")
+
+    async def iterate_part_async(
+        self,
+        part: PartInput,
+    ) -> AsyncIterator[bytes | memoryview]:
+        """Serialize one synchronous or asynchronous part."""
+        serialized = _coerce_part(part)
+        yield self.start_part(serialized.headers)
+
+        body = serialized.body
+        if isinstance(body, bytes | bytearray | memoryview):
+            yield self.write_body(body)
+        elif isinstance(body, Multipart):
+            async for nested_chunk in body.iterate_async():
+                yield self.write_body(nested_chunk)
+        elif isinstance(body, AsyncIterable):
+            async for async_chunk in body:
+                yield self.write_body(async_chunk)
+        else:
+            for sync_chunk in body:
+                yield self.write_body(sync_chunk)
+
+    def iterate(self, parts: Iterable[PartInput]) -> Iterator[bytes | memoryview]:
         """Serialize a synchronous iterable of parts."""
         for part in parts:
-            yield self.start_part(part.headers)
-            yield self.write_body(part.body)
+            yield from self.iterate_part(part)
         yield self.finalize()
 
     async def iterate_async(
         self,
-        parts: AsyncIterable[MultipartPart],
+        parts: Iterable[PartInput] | AsyncIterable[PartInput],
     ) -> AsyncIterator[bytes | memoryview]:
-        """Serialize an asynchronous iterable of parts."""
-        async for part in parts:
-            yield self.start_part(part.headers)
-            yield self.write_body(part.body)
+        """Serialize a synchronous or asynchronous iterable of parts."""
+        if isinstance(parts, AsyncIterable):
+            async for part in parts:
+                async for chunk in self.iterate_part_async(part):
+                    yield chunk
+        else:
+            for part in parts:
+                async for chunk in self.iterate_part_async(part):
+                    yield chunk
         yield self.finalize()
 
-    def render(self, parts: Iterable[MultipartPart]) -> bytes:
-        """Serialize all parts into one byte string."""
+    def render(self, parts: Iterable[PartInput]) -> bytes:
+        """Serialize all synchronous parts into one byte string."""
         return b"".join(self.iterate(parts))

@@ -7,11 +7,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from python_multipart.multipart import parse_options_header
 
-from multipart_response import MultipartPart
+from multipart_response import Multipart, MultipartPart
 from multipart_response.fastapi import (
     HTMLMultipartResponse,
     HTMLPart,
     JSONPart,
+    Multipart as FastAPIMultipart,
     MultipartResponse,
     Part,
     TextPart,
@@ -23,6 +24,7 @@ from multipart_response.starlette import (
 
 
 def test_fastapi_adapter_reexports_starlette_api() -> None:
+    assert FastAPIMultipart is Multipart
     assert MultipartResponse is StarletteMultipartResponse
     assert HTMLMultipartResponse is StarletteHTMLMultipartResponse
     assert Part(b"part").body == b"part"
@@ -119,6 +121,55 @@ def test_fastapi_streams_html_strings_with_per_part_headers() -> None:
         ],
         b"<li>New report</li>",
     )
+
+
+def test_fastapi_streams_one_part_body() -> None:
+    app = FastAPI()
+
+    async def body() -> AsyncIterator[bytes]:
+        yield b"one"
+        yield b"two"
+
+    @app.get("/download", response_class=MultipartResponse)
+    async def download() -> AsyncIterator[Part]:
+        yield Part(body(), media_type="application/octet-stream")
+
+    with TestClient(app) as client:
+        response = client.get("/download")
+
+    _, options = parse_options_header(response.headers["content-type"])
+    part = parse_multipart(response.content, options[b"boundary"])[0]
+    assert part.headers == [(b"content-type", b"application/octet-stream")]
+    assert part.body == b"onetwo"
+
+
+def test_fastapi_streams_nested_multipart_parts() -> None:
+    app = FastAPI()
+
+    @app.get("/nested", response_class=MultipartResponse)
+    async def nested() -> AsyncIterator[Multipart]:
+        yield Multipart(
+            [
+                TextPart("Plain text"),
+                HTMLPart("<p>HTML</p>"),
+            ],
+            subtype="alternative",
+            boundary="inner",
+        )
+
+    with TestClient(app) as client:
+        response = client.get("/nested")
+
+    _, options = parse_options_header(response.headers["content-type"])
+    outer_part = parse_multipart(response.content, options[b"boundary"])[0]
+    assert outer_part.headers[-1] == (
+        b"content-type",
+        b"multipart/alternative; boundary=inner",
+    )
+    assert [part.body for part in parse_multipart(outer_part.body, b"inner")] == [
+        b"Plain text",
+        b"<p>HTML</p>",
+    ]
 
 
 def test_fastapi_html_response_accepts_explicit_parts() -> None:
