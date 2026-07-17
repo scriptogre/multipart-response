@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator, Mapping, Sequence
-from typing import Any, TypeAlias
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from typing import Any, TypeAlias, cast
 
 from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from .core import MultipartPart, MultipartWriter
 
@@ -40,28 +48,37 @@ class Part:
         return body
 
     def init_headers(self, headers: Mapping[str, str] | None = None) -> None:
-        raw_headers = (
-            []
-            if headers is None
-            else [
+        if headers is None:
+            raw_headers: list[tuple[bytes, bytes]] = []
+            populate_content_length = True
+            populate_content_type = True
+        else:
+            raw_headers = [
                 (key.lower().encode("latin-1"), value.encode("latin-1"))
                 for key, value in headers.items()
             ]
-        )
+            keys = [name for name, _ in raw_headers]
+            populate_content_length = b"content-length" not in keys
+            populate_content_type = b"content-type" not in keys
 
-        if self.media_type is not None and b"content-type" not in {name for name, _ in raw_headers}:
+        if populate_content_length:
+            raw_headers.append((b"content-length", str(len(self.body)).encode("latin-1")))
+
+        if self.media_type is not None and populate_content_type:
             content_type = self.media_type
             if content_type.startswith("text/") and "charset=" not in content_type.lower():
                 content_type += "; charset=" + self.charset
             raw_headers.append((b"content-type", content_type.encode("latin-1")))
 
-        self.raw_headers: list[tuple[bytes, bytes]] = raw_headers
+        self.raw_headers = raw_headers
 
-    @property
-    def headers(self) -> MutableHeaders:
-        if not hasattr(self, "_headers"):
-            self._headers = MutableHeaders(raw=self.raw_headers)
-        return self._headers
+    headers = cast(MutableHeaders, Response.headers)
+    set_cookie = cast(Callable[..., None], Response.set_cookie)
+    delete_cookie = cast(Callable[..., None], Response.delete_cookie)
+
+    def render_headers(self) -> bytes:
+        """Render the part headers with CRLF line endings."""
+        return b"".join(name + b": " + value + b"\r\n" for name, value in self.raw_headers)
 
     def as_multipart_part(self) -> MultipartPart:
         """Return the framework-neutral representation of this part."""

@@ -55,14 +55,29 @@ def test_part_uses_starlette_rendering_and_headers() -> None:
     part.headers["Content-ID"] = "<part>"
     assert part.headers["content-id"] == "<part>"
     assert part.headers is part.headers
-    assert "content-length" not in part.headers
+    assert part.headers["content-length"] == "4"
+
+    part.set_cookie("session", "value", httponly=True)
+    part.delete_cookie("obsolete")
+    assert len(part.headers.getlist("set-cookie")) == 2
+    assert b"content-id: <part>\r\n" in part.render_headers()
+    assert b"set-cookie: session=value" in part.render_headers()
 
 
 def test_part_convenience_classes() -> None:
-    assert TextPart("héllo").raw_headers == [(b"content-type", b"text/plain; charset=utf-8")]
-    assert HTMLPart("<p>Hello</p>").raw_headers == [(b"content-type", b"text/html; charset=utf-8")]
+    assert TextPart("héllo").raw_headers == [
+        (b"content-length", b"6"),
+        (b"content-type", b"text/plain; charset=utf-8"),
+    ]
+    assert HTMLPart("<p>Hello</p>").raw_headers == [
+        (b"content-length", b"12"),
+        (b"content-type", b"text/html; charset=utf-8"),
+    ]
     assert JSONPart({"message": "héllo"}).body == b'{"message":"h\xc3\xa9llo"}'
-    assert JSONPart({"ok": True}).raw_headers == [(b"content-type", b"application/json")]
+    assert JSONPart({"ok": True}).raw_headers == [
+        (b"content-length", b"11"),
+        (b"content-type", b"application/json"),
+    ]
 
     with pytest.raises(ValueError):
         JSONPart({"value": float("nan")})
@@ -88,12 +103,27 @@ def test_sequence_is_buffered_with_content_length_and_value_coercion() -> None:
     assert result.headers["content-length"] == str(len(result.content))
     assert result.content == response.body
     assert parse_multipart(result.content, b"fixed") == [
-        ParsedPart([(b"content-type", b"text/plain; charset=utf-8")], b"plain"),
-        ParsedPart([(b"content-type", b"application/json")], b'{"status":"ok"}'),
-        ParsedPart([(b"content-type", b"application/octet-stream")], b"array"),
-        ParsedPart([(b"content-type", b"application/octet-stream")], b"view"),
         ParsedPart(
-            [(b"content-type", b"text/html; charset=utf-8")],
+            [(b"content-length", b"5"), (b"content-type", b"text/plain; charset=utf-8")],
+            b"plain",
+        ),
+        ParsedPart(
+            [(b"content-length", b"15"), (b"content-type", b"application/json")],
+            b'{"status":"ok"}',
+        ),
+        ParsedPart(
+            [(b"content-length", b"5"), (b"content-type", b"application/octet-stream")],
+            b"array",
+        ),
+        ParsedPart(
+            [(b"content-length", b"4"), (b"content-type", b"application/octet-stream")],
+            b"view",
+        ),
+        ParsedPart(
+            [
+                (b"content-length", b"21"),
+                (b"content-type", b"text/html; charset=utf-8"),
+            ],
             b"<strong>HTML</strong>",
         ),
         ParsedPart([(b"Content-Type", b"application/custom")], b"raw"),

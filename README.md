@@ -18,9 +18,9 @@ For FastAPI:
 uv add "multipart-response[fastapi]"
 ```
 
-## Return a FastAPI response
+## Stream parts from FastAPI
 
-Return `MultipartResponse` directly from a path operation:
+FastAPI 0.134.0 and later can stream values yielded by a path operation into the declared response class:
 
 ```python
 from fastapi import FastAPI
@@ -30,30 +30,71 @@ app = FastAPI()
 
 
 @app.get("/report", response_class=MultipartResponse)
-async def report() -> MultipartResponse:
-    return MultipartResponse([
-        JSONPart({"status": "ready"}),
-        TextPart("Report complete"),
-    ])
+async def report():
+    yield TextPart("Preparing report")
+    yield JSONPart({"status": "ready"})
 ```
 
-The response uses `multipart/mixed` and includes a generated boundary:
+FastAPI passes the async iterable to `MultipartResponse`, which writes each part as it arrives. The response uses `multipart/mixed` and includes a generated boundary:
 
 ```http
 Content-Type: multipart/mixed; boundary=multipart-...
 
 --multipart-...
+content-length: 16
+content-type: text/plain; charset=utf-8
+
+Preparing report
+--multipart-...
+content-length: 18
 content-type: application/json
 
 {"status":"ready"}
---multipart-...
-content-type: text/plain; charset=utf-8
-
-Report complete
 --multipart-...--
 ```
 
-FastAPI uses `response_class` to document `multipart/mixed` in OpenAPI. The response returned by the path operation supplies the runtime boundary.
+You can also construct and return a response directly. Use this form to set response options or when the parts already come from another iterable:
+
+```python
+@app.get("/summary")
+async def summary() -> MultipartResponse:
+    return MultipartResponse(
+        [
+            TextPart("Summary"),
+            JSONPart({"complete": True}),
+        ],
+        status_code=200,
+        headers={"X-Report": "summary"},
+    )
+```
+
+## Target each htmx update
+
+Each part has its own headers. An htmx client can use those headers to swap each HTML fragment into a different target:
+
+```python
+from multipart_response.fastapi import HTMLPart, MultipartResponse
+
+
+@app.get("/dashboard", response_class=MultipartResponse)
+async def dashboard():
+    yield HTMLPart(
+        "<p>Ready</p>",
+        headers={
+            "HX-Target": "#status",
+            "HX-Swap": "innerHTML",
+        },
+    )
+    yield HTMLPart(
+        "<li>New report</li>",
+        headers={
+            "HX-Target": "#reports",
+            "HX-Swap": "beforeend",
+        },
+    )
+```
+
+The first part updates `#status`. The second appends an item to `#reports`. The outer HTTP response still has one status code and one set of response headers, while each part controls its own swap.
 
 ## Return a Starlette response
 
@@ -76,7 +117,9 @@ async def endpoint(request):
 
 Strings become `TextPart`, dictionaries become `JSONPart`, and bytes-like values use `application/octet-stream`.
 
-## Customize a part
+## Customize a Starlette part
+
+`Part` follows Starlette's response conventions for rendering content and managing headers:
 
 ```python
 from multipart_response.starlette import Part
@@ -86,9 +129,25 @@ part = Part(
     media_type="image/png",
     headers={"Content-ID": "<preview>"},
 )
+
+part.headers["Content-Disposition"] = 'attachment; filename="preview.png"'
 ```
 
-Part headers describe the enclosed representation. HTTP response properties such as status codes, cookies, and background tasks belong to the outer `MultipartResponse`.
+A part automatically adds `Content-Length`. Text media types also receive `charset=utf-8` unless the media type already declares a charset.
+
+### Part API
+
+- `body` contains the rendered bytes or memory view.
+- `raw_headers` contains the encoded `(name, value)` header pairs.
+- `headers` provides Starlette's mutable `MutableHeaders` interface.
+- `media_type` and `charset` control the generated `Content-Type`.
+- `render(content)` converts content into bytes and can be overridden by subclasses.
+- `init_headers(headers)` builds `raw_headers` and can be overridden by subclasses.
+- `render_headers()` returns the complete part header block with CRLF line endings.
+- `set_cookie(...)` and `delete_cookie(...)` use the same signatures as Starlette's `Response` methods and add `Set-Cookie` fields to the part.
+- `as_multipart_part()` returns the framework-neutral `MultipartPart` representation.
+
+A part has no HTTP status code or background task. Those belong to the outer `MultipartResponse`. Cookies set on a part are part headers and are not cookies on the outer HTTP response.
 
 ## Use the writer directly
 
