@@ -1,26 +1,21 @@
 # Multipart Response
 
-Build and stream multipart HTTP responses with a dependency-free writer and adapters for Python web frameworks.
+Stream multipart responses from FastAPI and Starlette.
 
-The first release supports Starlette and FastAPI. Django support is planned.
+Use the core writer without framework dependencies. A Django adapter is planned.
 
 ## Install
 
-For Starlette:
-
-```console
-uv add "multipart-response[starlette]"
-```
-
-For FastAPI:
+Choose an adapter:
 
 ```console
 uv add "multipart-response[fastapi]"
+uv add "multipart-response[starlette]"
 ```
 
-## Stream parts from FastAPI
+## Stream from FastAPI
 
-FastAPI 0.134.0 and later can stream values yielded by a path operation into the declared response class:
+With FastAPI 0.134.0 or later, yield each part from the path operation:
 
 ```python
 from fastapi import FastAPI
@@ -35,7 +30,7 @@ async def report():
     yield JSONPart({"status": "ready"})
 ```
 
-FastAPI passes the async iterable to `MultipartResponse`, which writes each part as it arrives. The response uses `multipart/mixed` and includes a generated boundary:
+The server sends each part as it arrives:
 
 ```http
 Content-Type: multipart/mixed; boundary=multipart-...
@@ -53,7 +48,7 @@ content-type: application/json
 --multipart-...--
 ```
 
-You can also construct and return a response directly. Use this form to set response options or when the parts already come from another iterable:
+Return `MultipartResponse` directly when you need to set the status or outer headers:
 
 ```python
 @app.get("/summary")
@@ -68,9 +63,9 @@ async def summary() -> MultipartResponse:
     )
 ```
 
-## Target each htmx update
+## Target each htmx swap
 
-Each part has its own headers. An htmx client can use those headers to swap each HTML fragment into a different target:
+Set headers on each HTML part to control its target and swap:
 
 ```python
 from multipart_response.fastapi import HTMLPart, MultipartResponse
@@ -94,9 +89,11 @@ async def dashboard():
     )
 ```
 
-The first part updates `#status`. The second appends an item to `#reports`. The outer HTTP response still has one status code and one set of response headers, while each part controls its own swap.
+The first part replaces `#status`. The second appends to `#reports`.
 
 ## Return a Starlette response
+
+Return `MultipartResponse` from a Starlette endpoint:
 
 ```python
 from multipart_response.starlette import HTMLPart, JSONPart, MultipartResponse
@@ -109,17 +106,23 @@ async def endpoint(request):
     ])
 ```
 
-`MultipartResponse` accepts:
+Pass a sequence to buffer the body and set its outer `Content-Length`. Pass a sync or async iterable to stream it.
 
-- A sequence, which is buffered and receives an outer `Content-Length`.
-- A synchronous iterable, which Starlette runs in its thread pool.
-- An asynchronous iterable, which streams directly.
+Use plain values when you do not need custom headers:
 
-Strings become `TextPart`, dictionaries become `JSONPart`, and bytes-like values use `application/octet-stream`.
+```python
+return MultipartResponse([
+    "plain text",
+    {"status": "ready"},
+    b"binary data",
+])
+```
 
-## Customize a Starlette part
+Strings use `text/plain`. Dictionaries use `application/json`. Bytes use `application/octet-stream`.
 
-`Part` follows Starlette's response conventions for rendering content and managing headers:
+## Build a custom part
+
+Set the media type and headers on `Part`:
 
 ```python
 from multipart_response.starlette import Part
@@ -131,27 +134,32 @@ part = Part(
 )
 
 part.headers["Content-Disposition"] = 'attachment; filename="preview.png"'
+part.set_cookie("preview", "ready")
 ```
 
-A part automatically adds `Content-Length`. Text media types also receive `charset=utf-8` unless the media type already declares a charset.
+`Part` adds `Content-Length`. For text media types, it also adds `charset=utf-8` when no charset is set.
 
 ### Part API
 
-- `body` contains the rendered bytes or memory view.
-- `raw_headers` contains the encoded `(name, value)` header pairs.
-- `headers` provides Starlette's mutable `MutableHeaders` interface.
-- `media_type` and `charset` control the generated `Content-Type`.
-- `render(content)` converts content into bytes and can be overridden by subclasses.
-- `init_headers(headers)` builds `raw_headers` and can be overridden by subclasses.
-- `render_headers()` returns the complete part header block with CRLF line endings.
-- `set_cookie(...)` and `delete_cookie(...)` use the same signatures as Starlette's `Response` methods and add `Set-Cookie` fields to the part.
-- `as_multipart_part()` returns the framework-neutral `MultipartPart` representation.
+| Name | Use |
+| --- | --- |
+| `body` | Read the rendered bytes or memory view. |
+| `raw_headers` | Read the encoded `(name, value)` pairs. |
+| `headers` | Read or change headers through Starlette's `MutableHeaders`. |
+| `media_type` | Set the generated `Content-Type`. |
+| `charset` | Set the text encoding. Defaults to `utf-8`. |
+| `render(content)` | Convert content to bytes. Override it in a subclass. |
+| `init_headers(headers)` | Build `raw_headers`. Override it in a subclass. |
+| `render_headers()` | Render the header block with CRLF line endings. |
+| `set_cookie(...)` | Add a `Set-Cookie` part header with Starlette's API. |
+| `delete_cookie(...)` | Expire a cookie in the part headers. |
+| `as_multipart_part()` | Convert to the framework-neutral `MultipartPart`. |
 
-A part has no HTTP status code or background task. Those belong to the outer `MultipartResponse`. Cookies set on a part are part headers and are not cookies on the outer HTTP response.
+Set the HTTP status, outer cookies, and background task on `MultipartResponse`. A part has none of those values.
 
-## Use the writer directly
+## Use the core writer
 
-The core package has no runtime dependencies:
+Import the core without installing a framework extra:
 
 ```python
 from multipart_response import MultipartPart, MultipartWriter
@@ -164,21 +172,19 @@ body = writer.render([
     ),
 ])
 
-content_type = writer.content_type("mixed")
+assert writer.content_type() == "multipart/mixed; boundary=example"
 ```
 
-A writer is single-use. Create a new writer for each multipart message.
+Create a new writer for each message.
 
-## Protocol behavior
+## Framing rules
 
 The writer:
 
-- Generates boundaries with 128 bits of randomness.
-- Validates the RFC 2046 boundary grammar and 70-byte limit.
-- Emits CRLF around delimiter lines.
-- Requires at least one body part.
-- Validates MIME header names, values, and line lengths.
-- Rejects boundary collisions, including collisions split across body chunks.
-- Preserves header order and duplicates in `MultipartPart`.
-
-Framework-specific part classes handle value rendering. The core writer handles multipart framing.
+- Generates a boundary with 128 random bits.
+- Limits boundaries to the RFC 2046 grammar and 70-byte maximum.
+- Uses CRLF around each delimiter.
+- Requires at least one part.
+- Rejects invalid header names, values, and line lengths.
+- Rejects boundary collisions across body chunks.
+- Keeps header order and duplicate headers.
