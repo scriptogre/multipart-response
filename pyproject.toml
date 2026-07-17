@@ -13,6 +13,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "Christian Tanul", email = "git@christiantanul.com" },
 ]
+keywords = ["multipart", "streaming", "http", "response", "fastapi", "starlette", "htmx"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Web Environment",
