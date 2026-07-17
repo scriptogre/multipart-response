@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "multipart-response"
+version = "0.1.0"
+description = "Build and stream multipart responses with adapters for Python web frameworks."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "Christian Tanul", email = "git@christiantanul.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+starlette = ["starlette>=0.37.2"]
+fastapi = ["fastapi>=0.115.0"]
+
+[dependency-groups]
+dev = [
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "httpx2>=2.0.0",
+    "mypy>=1.15.0",
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "python-multipart>=0.0.20",
+    "ruff>=0.11.0",
+    "starlette>=0.37.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/scriptogre/multipart-response"
+Issues = "https://github.com/scriptogre/multipart-response/issues"
+Source = "https://github.com/scriptogre/multipart-response"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/multipart_response"]
+
+[tool.mypy]
+strict = true
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --cov=multipart_response --cov-report=term-missing --cov-fail-under=100"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "RUF100"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
