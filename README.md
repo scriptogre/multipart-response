@@ -2,7 +2,18 @@
 
 Stream multipart responses from FastAPI and Starlette.
 
-Use the core writer without framework dependencies. A Django adapter is planned.
+```python
+from fastapi import FastAPI
+from multipart_response.fastapi import HTMLPart, MultipartResponse
+
+app = FastAPI()
+
+
+@app.get("/updates", response_class=MultipartResponse)
+async def updates():
+    yield HTMLPart("<p>Ready</p>")
+    yield HTMLPart("<p>Done</p>")
+```
 
 ## Install
 
