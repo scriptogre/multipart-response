@@ -4,15 +4,15 @@ Stream multipart responses from FastAPI and Starlette.
 
 ```python
 from fastapi import FastAPI
-from multipart_response.fastapi import HTMLPart, MultipartResponse
+from multipart_response.fastapi import HTMLMultipartResponse
 
 app = FastAPI()
 
 
-@app.get("/updates", response_class=MultipartResponse)
+@app.get("/updates", response_class=HTMLMultipartResponse)
 async def updates():
-    yield HTMLPart("<p>Ready</p>")
-    yield HTMLPart("<p>Done</p>")
+    yield "<p>Ready</p>"
+    yield "<p>Done</p>"
 ```
 
 ## Install
@@ -76,24 +76,24 @@ async def summary() -> MultipartResponse:
 
 ## Target each htmx swap
 
-Set headers on each HTML part to control its target and swap:
+Yield `(content, headers)` to set headers on one HTML part:
 
 ```python
-from multipart_response.fastapi import HTMLPart, MultipartResponse
+from multipart_response.fastapi import HTMLMultipartResponse
 
 
-@app.get("/dashboard", response_class=MultipartResponse)
+@app.get("/dashboard", response_class=HTMLMultipartResponse)
 async def dashboard():
-    yield HTMLPart(
+    yield (
         "<p>Ready</p>",
-        headers={
+        {
             "HX-Target": "#status",
             "HX-Swap": "innerHTML",
         },
     )
-    yield HTMLPart(
+    yield (
         "<li>New report</li>",
-        headers={
+        {
             "HX-Target": "#reports",
             "HX-Swap": "beforeend",
         },
@@ -119,17 +119,17 @@ async def endpoint(request):
 
 Pass a sequence to buffer the body and set its outer `Content-Length`. Pass a sync or async iterable to stream it.
 
-Use plain values when you do not need custom headers:
+`MultipartResponse` requires explicit `Part` or `MultipartPart` values. `HTMLMultipartResponse` also accepts HTML strings and `(HTML, headers)` pairs. It passes explicit parts through unchanged:
 
 ```python
-return MultipartResponse([
-    "plain text",
-    {"status": "ready"},
-    b"binary data",
+from multipart_response.starlette import HTMLMultipartResponse, JSONPart, TextPart
+
+return HTMLMultipartResponse([
+    "<p>HTML shorthand</p>",
+    TextPart("Explicit plain text"),
+    JSONPart({"status": "ready"}),
 ])
 ```
-
-Strings use `text/plain`. Dictionaries use `application/json`. Bytes use `application/octet-stream`.
 
 ## Build a custom part
 

@@ -7,18 +7,24 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from python_multipart.multipart import parse_options_header
 
+from multipart_response import MultipartPart
 from multipart_response.fastapi import (
+    HTMLMultipartResponse,
     HTMLPart,
     JSONPart,
     MultipartResponse,
     Part,
     TextPart,
 )
-from multipart_response.starlette import MultipartResponse as StarletteMultipartResponse
+from multipart_response.starlette import (
+    HTMLMultipartResponse as StarletteHTMLMultipartResponse,
+    MultipartResponse as StarletteMultipartResponse,
+)
 
 
 def test_fastapi_adapter_reexports_starlette_api() -> None:
     assert MultipartResponse is StarletteMultipartResponse
+    assert HTMLMultipartResponse is StarletteHTMLMultipartResponse
     assert Part(b"part").body == b"part"
     assert TextPart("text").body == b"text"
     assert HTMLPart("<p>html</p>").body == b"<p>html</p>"
@@ -78,18 +84,18 @@ def test_fastapi_streams_parts_yielded_by_endpoint() -> None:
     ]
 
 
-def test_fastapi_streams_per_part_htmx_headers() -> None:
+def test_fastapi_streams_html_strings_with_per_part_headers() -> None:
     app = FastAPI()
 
-    @app.get("/dashboard", response_class=MultipartResponse)
-    async def dashboard() -> AsyncIterator[HTMLPart]:
-        yield HTMLPart(
-            "<p>Ready</p>",
-            headers={"HX-Target": "#status", "HX-Swap": "innerHTML"},
-        )
-        yield HTMLPart(
+    @app.get("/dashboard", response_class=HTMLMultipartResponse)
+    async def dashboard() -> AsyncIterator[str | tuple[str, dict[str, str]]]:
+        yield "<p>Ready</p>"
+        yield (
             "<li>New report</li>",
-            headers={"HX-Target": "#reports", "HX-Swap": "beforeend"},
+            {
+                "HX-Target": "#reports",
+                "HX-Swap": "beforeend",
+            },
         )
 
     with TestClient(app) as client:
@@ -99,8 +105,6 @@ def test_fastapi_streams_per_part_htmx_headers() -> None:
     parts = parse_multipart(response.content, options[b"boundary"])
     assert parts[0] == ParsedPart(
         [
-            (b"hx-target", b"#status"),
-            (b"hx-swap", b"innerHTML"),
             (b"content-length", b"12"),
             (b"content-type", b"text/html; charset=utf-8"),
         ],
@@ -115,3 +119,29 @@ def test_fastapi_streams_per_part_htmx_headers() -> None:
         ],
         b"<li>New report</li>",
     )
+
+
+def test_fastapi_html_response_accepts_explicit_parts() -> None:
+    app = FastAPI()
+
+    @app.get("/mixed", response_class=HTMLMultipartResponse)
+    async def mixed() -> AsyncIterator[Part | MultipartPart]:
+        yield TextPart("plain")
+        yield JSONPart({"status": "ready"})
+        yield MultipartPart(b"raw", [(b"Content-Type", b"application/custom")])
+
+    with TestClient(app) as client:
+        response = client.get("/mixed")
+
+    _, options = parse_options_header(response.headers["content-type"])
+    assert parse_multipart(response.content, options[b"boundary"]) == [
+        ParsedPart(
+            [(b"content-length", b"5"), (b"content-type", b"text/plain; charset=utf-8")],
+            b"plain",
+        ),
+        ParsedPart(
+            [(b"content-length", b"18"), (b"content-type", b"application/json")],
+            b'{"status":"ready"}',
+        ),
+        ParsedPart([(b"Content-Type", b"application/custom")], b"raw"),
+    ]

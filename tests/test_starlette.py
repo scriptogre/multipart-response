@@ -12,6 +12,7 @@ from starlette.types import Receive, Scope, Send
 
 from multipart_response import MultipartPart
 from multipart_response.starlette import (
+    HTMLMultipartResponse,
     HTMLPart,
     JSONPart,
     MultipartResponse,
@@ -83,13 +84,13 @@ def test_part_convenience_classes() -> None:
         JSONPart({"value": float("nan")})
 
 
-def test_sequence_is_buffered_with_content_length_and_value_coercion() -> None:
+def test_sequence_is_buffered_with_content_length() -> None:
     response = MultipartResponse(
         [
-            "plain",
-            {"status": "ok"},
-            bytearray(b"array"),
-            memoryview(b"view"),
+            TextPart("plain"),
+            JSONPart({"status": "ok"}),
+            Part(bytearray(b"array"), media_type="application/octet-stream"),
+            Part(memoryview(b"view"), media_type="application/octet-stream"),
             HTMLPart("<strong>HTML</strong>"),
             MultipartPart(b"raw", [(b"Content-Type", b"application/custom")]),
         ],
@@ -128,6 +129,153 @@ def test_sequence_is_buffered_with_content_length_and_value_coercion() -> None:
         ),
         ParsedPart([(b"Content-Type", b"application/custom")], b"raw"),
     ]
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "text",
+        {"status": "ok"},
+        b"bytes",
+        bytearray(b"array"),
+        memoryview(b"view"),
+        ("text", {"X-Part": "value"}),
+        123,
+    ],
+)
+def test_multipart_response_requires_explicit_parts(item: object) -> None:
+    with pytest.raises(
+        TypeError,
+        match=rf"MultipartResponse items must be Part or MultipartPart; got {type(item).__name__}",
+    ):
+        MultipartResponse([item])  # type: ignore[list-item]
+
+
+def test_html_response_converts_strings_and_header_pairs() -> None:
+    response = HTMLMultipartResponse(
+        [
+            "<p>Loading</p>",
+            (
+                "<p>Ready</p>",
+                {"HX-Target": "#status", "HX-Swap": "innerHTML"},
+            ),
+        ],
+        boundary="html",
+    )
+
+    result = get_response(response)
+
+    assert result.headers["content-length"] == str(len(result.content))
+    assert parse_multipart(result.content, b"html") == [
+        ParsedPart(
+            [
+                (b"content-length", b"14"),
+                (b"content-type", b"text/html; charset=utf-8"),
+            ],
+            b"<p>Loading</p>",
+        ),
+        ParsedPart(
+            [
+                (b"hx-target", b"#status"),
+                (b"hx-swap", b"innerHTML"),
+                (b"content-length", b"12"),
+                (b"content-type", b"text/html; charset=utf-8"),
+            ],
+            b"<p>Ready</p>",
+        ),
+    ]
+
+
+def test_synchronous_html_iterable_streams_implicit_parts() -> None:
+    def parts() -> Iterator[str | tuple[str, dict[str, str]]]:
+        yield "<p>One</p>"
+        yield "<p>Two</p>", {"X-Part": "two"}
+
+    result = get_response(HTMLMultipartResponse(parts(), boundary="html-sync"))
+
+    assert "content-length" not in result.headers
+    assert [part.body for part in parse_multipart(result.content, b"html-sync")] == [
+        b"<p>One</p>",
+        b"<p>Two</p>",
+    ]
+
+
+def test_asynchronous_html_iterable_streams_implicit_parts() -> None:
+    async def parts() -> AsyncIterator[str | tuple[str, dict[str, str]]]:
+        yield "<p>One</p>"
+        yield "<p>Two</p>", {"X-Part": "two"}
+
+    result = get_response(HTMLMultipartResponse(parts(), boundary="html-async"))
+
+    assert "content-length" not in result.headers
+    assert [part.body for part in parse_multipart(result.content, b"html-async")] == [
+        b"<p>One</p>",
+        b"<p>Two</p>",
+    ]
+
+
+def test_html_response_honors_an_explicit_content_type_in_pair_headers() -> None:
+    response = HTMLMultipartResponse(
+        [("<p>Literal markup</p>", {"Content-Type": "text/plain; charset=utf-8"})],
+        boundary="override",
+    )
+
+    part = parse_multipart(get_response(response).content, b"override")[0]
+
+    assert part.headers == [
+        (b"content-type", b"text/plain; charset=utf-8"),
+        (b"content-length", b"21"),
+    ]
+
+
+def test_html_response_passes_explicit_parts_through_unchanged() -> None:
+    response = HTMLMultipartResponse(
+        [
+            Part(b"untyped", headers={"X-Part": "raw"}),
+            TextPart("plain"),
+            HTMLPart("<p>Explicit</p>"),
+            JSONPart({"status": "ready"}),
+            MultipartPart(b"custom", [(b"X-Raw", b"yes")]),
+        ],
+        boundary="explicit",
+    )
+
+    parts = parse_multipart(get_response(response).content, b"explicit")
+
+    assert parts == [
+        ParsedPart([(b"x-part", b"raw"), (b"content-length", b"7")], b"untyped"),
+        ParsedPart(
+            [(b"content-length", b"5"), (b"content-type", b"text/plain; charset=utf-8")],
+            b"plain",
+        ),
+        ParsedPart(
+            [(b"content-length", b"15"), (b"content-type", b"text/html; charset=utf-8")],
+            b"<p>Explicit</p>",
+        ),
+        ParsedPart(
+            [(b"content-length", b"18"), (b"content-type", b"application/json")],
+            b'{"status":"ready"}',
+        ),
+        ParsedPart([(b"X-Raw", b"yes")], b"custom"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"status": "ready"},
+        b"bytes",
+        123,
+        ("body",),
+        ("body", {}, "extra"),
+        (123, {}),
+        ("body", []),
+        ("body", {"X-Part": 1}),
+    ],
+)
+def test_html_response_rejects_other_implicit_values(item: object) -> None:
+    with pytest.raises(TypeError):
+        HTMLMultipartResponse([item])  # type: ignore[list-item]
 
 
 def test_synchronous_iterable_streams_without_content_length() -> None:
@@ -182,21 +330,16 @@ def test_response_options_and_background_task() -> None:
 
 
 def test_generated_boundary_matches_content_type() -> None:
-    result = get_response(MultipartResponse(["body"]))
+    result = get_response(MultipartResponse([TextPart("body")]))
     boundary = response_boundary(result.headers["content-type"])
 
     assert boundary.startswith(b"multipart-")
     assert parse_multipart(result.content, boundary)[0].body == b"body"
 
 
-def test_invalid_item_is_rejected() -> None:
-    with pytest.raises(TypeError, match="got int"):
-        MultipartResponse([123])  # type: ignore[list-item]
-
-
 def test_invalid_subtype_and_body_collision_are_rejected() -> None:
     with pytest.raises(ValueError, match="Invalid multipart subtype"):
-        MultipartResponse(["body"], subtype="bad subtype")
+        MultipartResponse([TextPart("body")], subtype="bad subtype")
 
     with pytest.raises(ValueError, match="body contains the boundary"):
         MultipartResponse([Part(b"\r\n--collision")], boundary="collision")

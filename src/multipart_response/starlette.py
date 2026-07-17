@@ -106,8 +106,12 @@ class JSONPart(Part):
         ).encode("utf-8")
 
 
-PartLike: TypeAlias = Part | MultipartPart | str | bytes | bytearray | memoryview | dict[str, Any]
+PartLike: TypeAlias = Part | MultipartPart
 PartSource: TypeAlias = Sequence[PartLike] | Iterable[PartLike] | AsyncIterable[PartLike]
+HTMLPartLike: TypeAlias = PartLike | str | tuple[str, Mapping[str, str]]
+HTMLPartSource: TypeAlias = (
+    Sequence[HTMLPartLike] | Iterable[HTMLPartLike] | AsyncIterable[HTMLPartLike]
+)
 
 
 class MultipartResponse(StreamingResponse):
@@ -144,21 +148,14 @@ class MultipartResponse(StreamingResponse):
         )
 
     def make_part(self, content: PartLike) -> MultipartPart:
-        """Convert Starlette-friendly values into a serialized part."""
+        """Return the serialized form of an explicit part."""
         if isinstance(content, MultipartPart):
             return content
         if isinstance(content, Part):
             return content.as_multipart_part()
-        if isinstance(content, str):
-            return TextPart(content).as_multipart_part()
-        if isinstance(content, dict):
-            return JSONPart(content).as_multipart_part()
-        if isinstance(content, bytes | bytearray | memoryview):
-            return Part(content, media_type="application/octet-stream").as_multipart_part()
 
         raise TypeError(
-            "MultipartResponse items must be Part, MultipartPart, str, dict, or bytes-like; "
-            f"got {type(content).__name__}"
+            f"MultipartResponse items must be Part or MultipartPart; got {type(content).__name__}"
         )
 
     def iterate(
@@ -186,7 +183,60 @@ class MultipartResponse(StreamingResponse):
         yield writer.finalize()
 
 
+class HTMLMultipartResponse(MultipartResponse):
+    """A multipart response that converts implicit string parts to HTML."""
+
+    def __init__(
+        self,
+        content: HTMLPartSource,
+        status_code: int = 200,
+        headers: Mapping[str, str] | None = None,
+        subtype: str = "mixed",
+        background: BackgroundTask | None = None,
+        boundary: bytes | str | None = None,
+    ) -> None:
+        super().__init__(
+            content=cast(PartSource, content),
+            status_code=status_code,
+            headers=headers,
+            subtype=subtype,
+            background=background,
+            boundary=boundary,
+        )
+
+    def make_part(self, content: HTMLPartLike) -> MultipartPart:
+        """Convert an HTML string shorthand or return an explicit part."""
+        if isinstance(content, str):
+            return HTMLPart(content).as_multipart_part()
+
+        if isinstance(content, tuple):
+            if (
+                len(content) != 2
+                or not isinstance(content[0], str)
+                or not isinstance(content[1], Mapping)
+            ):
+                raise TypeError(
+                    "HTMLMultipartResponse tuple items must contain an HTML string and headers"
+                )
+
+            body, headers = content
+            if not all(
+                isinstance(name, str) and isinstance(value, str) for name, value in headers.items()
+            ):
+                raise TypeError("HTMLMultipartResponse headers must map strings to strings")
+            return HTMLPart(body, headers=headers).as_multipart_part()
+
+        if isinstance(content, Part | MultipartPart):
+            return super().make_part(content)
+
+        raise TypeError(
+            "HTMLMultipartResponse items must be str, (str, headers), Part, or MultipartPart; "
+            f"got {type(content).__name__}"
+        )
+
+
 __all__ = [
+    "HTMLMultipartResponse",
     "HTMLPart",
     "JSONPart",
     "MultipartResponse",
