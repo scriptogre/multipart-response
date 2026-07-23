@@ -25,6 +25,29 @@ jobs:
       - run: uv sync --all-extras --dev
       - run: uv run pytest
 
+  django:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - django-version: "4.2"
+            python-version: "3.10"
+          - django-version: "5.2"
+            python-version: "3.14"
+          - django-version: "6.0"
+            python-version: "3.14"
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: >-
+          uv run --isolated --with "django~=${{ matrix.django-version }}.0"
+          pytest -o addopts="--strict-config --strict-markers" tests/test_django.py
+
   quality:
     runs-on: ubuntu-latest
 
