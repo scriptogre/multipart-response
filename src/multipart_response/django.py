@@ -151,7 +151,7 @@ class Part:
         return MultipartPart(self.content, raw_headers)
 
 
-class JSONPart(Part):
+class JsonPart(Part):
     def __init__(
         self,
         data: Any,
@@ -285,7 +285,7 @@ class MultipartResponse(StreamingHttpResponse):
 
 
 __all__ = [
-    "JSONPart",
+    "JsonPart",
     "Multipart",
     "MultipartResponse",
     "Part",

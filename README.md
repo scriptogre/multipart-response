@@ -78,6 +78,14 @@ part = Part(
 part.headers["HX-Swap"] = "innerHTML"
 ```
 
+Serialize Python data with Django's `JsonResponse` rules:
+
+```python
+from multipart_response.django import JsonPart
+
+part = JsonPart({"status": "ready"})
+```
+
 Use an async part source when Django runs under ASGI:
 
 ```python
@@ -119,7 +127,7 @@ async def report():
     yield Multipart([...], subtype="alternative")
 ```
 
-Django's `Part` uses `content_type` instead of `media_type`. Use `JSONPart` for Django's `JsonResponse` serialization rules.
+Django's `Part` uses `content_type` instead of `media_type`.
 
 ## Notes
 

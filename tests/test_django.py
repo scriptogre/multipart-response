@@ -23,7 +23,7 @@ from django.urls import path
 
 from multipart_response import Multipart, MultipartPart
 from multipart_response.django import (
-    JSONPart,
+    JsonPart,
     Multipart as DjangoMultipart,
     MultipartResponse,
     Part,
@@ -186,7 +186,7 @@ def test_part_render_headers_without_normal_headers() -> None:
 
 def test_json_part_uses_django_json_response() -> None:
     expected = JsonResponse({"when": 1}, headers={"X-Part": "json"})
-    part = JSONPart({"when": 1}, headers={"X-Part": "json"})
+    part = JsonPart({"when": 1}, headers={"X-Part": "json"})
 
     assert part.content == expected.content == b'{"when": 1}'
     assert list(part.items()) == list(expected.items())
@@ -195,7 +195,7 @@ def test_json_part_uses_django_json_response() -> None:
         def encode(self, value: Any) -> str:
             return '"encoded"'
 
-    custom = JSONPart(
+    custom = JsonPart(
         [1, 2],
         encoder=Encoder,
         safe=False,
@@ -208,7 +208,7 @@ def test_json_part_uses_django_json_response() -> None:
     assert custom.charset == "utf-8"
 
     with pytest.raises(TypeError, match="non-dict objects"):
-        JSONPart([1, 2])
+        JsonPart([1, 2])
 
 
 def test_django_adapter_reexports_core_multipart() -> None:
@@ -403,7 +403,7 @@ def test_generated_boundary_matches_content_type() -> None:
 def sync_view(request: object) -> MultipartResponse:
     def parts() -> Iterator[Part]:
         yield Part("one")
-        yield JSONPart({"part": 2})
+        yield JsonPart({"part": 2})
 
     return MultipartResponse(parts(), boundary="wsgi")
 
@@ -411,7 +411,7 @@ def sync_view(request: object) -> MultipartResponse:
 async def async_view(request: object) -> MultipartResponse:
     async def parts() -> AsyncIterator[Part]:
         yield Part("one")
-        yield JSONPart({"part": 2})
+        yield JsonPart({"part": 2})
 
     return MultipartResponse(parts(), boundary="asgi")
 
