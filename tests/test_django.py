@@ -23,13 +23,10 @@ from django.urls import path
 
 from multipart_response import Multipart, MultipartPart
 from multipart_response.django import (
-    HTMLMultipartResponse,
-    HTMLPart,
     JSONPart,
     Multipart as DjangoMultipart,
     MultipartResponse,
     Part,
-    TextPart,
 )
 
 
@@ -78,7 +75,7 @@ def test_part_uses_django_header_and_charset_behavior() -> None:
     assert type(part.headers) is type(expected.headers)
     assert list(part.items()) == list(expected.items())
     assert part.charset == expected.charset
-    assert part.body == b"h\xe9llo"
+    assert part.content == b"h\xe9llo"
     assert part.serialize_headers() == expected.serialize_headers()
 
     part["X-Set"] = 2
@@ -110,10 +107,10 @@ def test_part_uses_django_content_type_defaults_and_conflicts() -> None:
 
 
 def test_part_uses_django_scalar_and_stream_conversion() -> None:
-    assert Part(None).body == b"None"
-    assert Part(b"bytes").body == b"bytes"
-    assert Part(memoryview(b"view")).body == b"view"
-    assert Part(123).body == b"123"
+    assert Part(None).content == b"None"
+    assert Part(b"bytes").content == b"bytes"
+    assert Part(memoryview(b"view")).content == b"view"
+    assert Part(123).content == b"123"
 
     bytearray_part = Part(bytearray(b"ab"), content_type="application/octet-stream")
     assert consume(MultipartResponse([bytearray_part], boundary="array"))
@@ -187,18 +184,11 @@ def test_part_render_headers_without_normal_headers() -> None:
     assert part.render_headers() == b"Set-Cookie: session=value; Path=/\r\n"
 
 
-def test_part_convenience_classes_follow_django() -> None:
-    assert HTMLPart("<p>Hello</p>").body == b"<p>Hello</p>"
-    assert HTMLPart("body")["Content-Type"] == "text/html; charset=utf-8"
-    assert TextPart("héllo").body == b"h\xc3\xa9llo"
-    assert TextPart("body")["Content-Type"] == "text/plain"
-
-
 def test_json_part_uses_django_json_response() -> None:
     expected = JsonResponse({"when": 1}, headers={"X-Part": "json"})
     part = JSONPart({"when": 1}, headers={"X-Part": "json"})
 
-    assert part.body == expected.content == b'{"when": 1}'
+    assert part.content == expected.content == b'{"when": 1}'
     assert list(part.items()) == list(expected.items())
 
     class Encoder(DjangoJSONEncoder):
@@ -213,7 +203,7 @@ def test_json_part_uses_django_json_response() -> None:
         content_type="application/custom+json",
         charset="utf-8",
     )
-    assert custom.body == b'"encoded"'
+    assert custom.content == b'"encoded"'
     assert custom["Content-Type"] == "application/custom+json"
     assert custom.charset == "utf-8"
 
@@ -227,7 +217,7 @@ def test_django_adapter_reexports_core_multipart() -> None:
 
 def test_static_response_uses_django_envelope_options() -> None:
     response = MultipartResponse(
-        [TextPart("created")],
+        [Part("created")],
         status=201,
         reason="Made",
         charset="iso-8859-1",
@@ -251,7 +241,7 @@ def test_static_response_uses_django_envelope_options() -> None:
 def test_response_rejects_conflicting_envelope_content_type() -> None:
     with pytest.raises(ValueError, match="headers.*Content-Type"):
         MultipartResponse(
-            [TextPart("body")],
+            [Part("body")],
             headers={"Content-Type": "multipart/custom"},
         )
 
@@ -261,9 +251,9 @@ def test_sync_part_source_streams_lazily() -> None:
 
     def parts() -> Iterator[Part]:
         consumed.append("one")
-        yield TextPart("one")
+        yield Part("one")
         consumed.append("two")
-        yield TextPart("two")
+        yield Part("two")
 
     response = MultipartResponse(parts(), boundary="sync")
     assert consumed == []
@@ -280,9 +270,9 @@ def test_async_part_source_streams_lazily() -> None:
 
     async def parts() -> AsyncIterator[Part]:
         consumed.append("one")
-        yield TextPart("one")
+        yield Part("one")
         consumed.append("two")
-        yield TextPart("two")
+        yield Part("two")
 
     response = MultipartResponse(parts(), boundary="async")
     assert consumed == []
@@ -295,7 +285,7 @@ def test_async_part_source_streams_lazily() -> None:
 
 def test_response_accepts_raw_and_nested_parts() -> None:
     nested = Multipart(
-        [TextPart("plain"), HTMLPart("<p>HTML</p>")],
+        [Part("plain", content_type="text/plain"), Part("<p>HTML</p>")],
         subtype="alternative",
         boundary="inner",
     )
@@ -345,7 +335,7 @@ def test_nested_async_raw_part_selects_async_response() -> None:
 
 def test_nested_async_part_source_selects_async_response() -> None:
     async def parts() -> AsyncIterator[Part]:
-        yield TextPart("body")
+        yield Part("body")
 
     nested = Multipart(parts(), boundary="inner-source")
     response = MultipartResponse([nested], boundary="outer-source")
@@ -370,7 +360,7 @@ def test_nested_multipart_inside_multipart_is_detected() -> None:
 
 
 def test_part_rejects_conflicting_nested_content_type() -> None:
-    nested = Multipart([TextPart("body")], boundary="inner")
+    nested = Multipart([Part("body")], boundary="inner")
 
     with pytest.raises(ValueError, match="does not match nested multipart"):
         Part(nested, content_type="multipart/mixed; boundary=wrong")
@@ -386,46 +376,6 @@ def test_part_rejects_conflicting_nested_content_type() -> None:
         )
 
 
-def test_html_response_converts_django_shorthand() -> None:
-    response = HTMLMultipartResponse(
-        [
-            "<p>Ready</p>",
-            ("<li>New</li>", {"HX-Target": "#reports", "X-Number": 1}),
-            TextPart("plain"),
-            MultipartPart(b"raw"),
-            Multipart([TextPart("nested")], boundary="html-inner"),
-        ],
-        boundary="outer-html",
-    )
-    parts = parse_multipart(consume(response), b"outer-html")
-
-    assert [part.body for part in parts[:4]] == [
-        b"<p>Ready</p>",
-        b"<li>New</li>",
-        b"plain",
-        b"raw",
-    ]
-    assert parts[1].headers[:2] == [(b"HX-Target", b"#reports"), (b"X-Number", b"1")]
-    assert parse_multipart(parts[4].body, b"html-inner")[0].body == b"nested"
-
-
-@pytest.mark.parametrize(
-    "item",
-    [
-        {"status": "ready"},
-        b"bytes",
-        123,
-        ("body",),
-        ("body", {}, "extra"),
-        (123, {}),
-        ("body", []),
-    ],
-)
-def test_html_response_rejects_invalid_shorthand(item: object) -> None:
-    with pytest.raises(TypeError):
-        HTMLMultipartResponse([item])  # type: ignore[list-item]
-
-
 @pytest.mark.parametrize("item", ["text", b"bytes", 123, {"status": "ready"}])
 def test_multipart_response_requires_explicit_parts(item: object) -> None:
     with pytest.raises(TypeError, match="MultipartResponse items must be"):
@@ -437,14 +387,14 @@ def test_empty_invalid_subtype_and_boundary_collision_are_rejected() -> None:
         MultipartResponse([], boundary="empty")
 
     with pytest.raises(ValueError, match="Invalid multipart subtype"):
-        MultipartResponse([TextPart("body")], subtype="bad subtype")
+        MultipartResponse([Part("body")], subtype="bad subtype")
 
     with pytest.raises(ValueError, match="body contains the boundary"):
         MultipartResponse([Part(b"\r\n--collision")], boundary="collision")
 
 
 def test_generated_boundary_matches_content_type() -> None:
-    response = MultipartResponse([TextPart("body")])
+    response = MultipartResponse([Part("body")])
     assert response.boundary.startswith("multipart-")
     assert f"boundary={response.boundary}" in response["Content-Type"]
     assert parse_multipart(consume(response), response.boundary)[0].body == b"body"
@@ -452,7 +402,7 @@ def test_generated_boundary_matches_content_type() -> None:
 
 def sync_view(request: object) -> MultipartResponse:
     def parts() -> Iterator[Part]:
-        yield TextPart("one")
+        yield Part("one")
         yield JSONPart({"part": 2})
 
     return MultipartResponse(parts(), boundary="wsgi")
@@ -460,7 +410,7 @@ def sync_view(request: object) -> MultipartResponse:
 
 async def async_view(request: object) -> MultipartResponse:
     async def parts() -> AsyncIterator[Part]:
-        yield TextPart("one")
+        yield Part("one")
         yield JSONPart({"part": 2})
 
     return MultipartResponse(parts(), boundary="asgi")

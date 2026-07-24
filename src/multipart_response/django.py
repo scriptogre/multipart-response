@@ -85,7 +85,7 @@ class Part:
             headers=headers,
         )
         self._adopt_response(response)
-        self.body = self.render(content)
+        self.content = self.render(content)
 
     def _adopt_response(self, response: HttpResponse) -> None:
         self.headers = response.headers
@@ -148,15 +148,7 @@ class Part:
             )
             for cookie in self.cookies.values()
         )
-        return MultipartPart(self.body, raw_headers)
-
-
-class TextPart(Part):
-    content_type = "text/plain"
-
-
-class HTMLPart(Part):
-    pass
+        return MultipartPart(self.content, raw_headers)
 
 
 class JSONPart(Part):
@@ -181,15 +173,11 @@ class JSONPart(Part):
             headers=headers,
         )
         self._adopt_response(response)
-        self.body = response.content
+        self.content = response.content
 
 
 PartLike: TypeAlias = Part | MultipartPart | Multipart
 PartSource: TypeAlias = Sequence[PartLike] | Iterable[PartLike] | AsyncIterable[PartLike]
-HTMLPartLike: TypeAlias = PartLike | str | tuple[str, Mapping[str, object]]
-HTMLPartSource: TypeAlias = (
-    Sequence[HTMLPartLike] | Iterable[HTMLPartLike] | AsyncIterable[HTMLPartLike]
-)
 
 
 def _part_is_async(part: MultipartPart) -> bool:
@@ -296,62 +284,9 @@ class MultipartResponse(StreamingHttpResponse):
         )
 
 
-class HTMLMultipartResponse(MultipartResponse):
-    """A multipart response that converts implicit string parts to HTML."""
-
-    def __init__(
-        self,
-        content: HTMLPartSource,
-        *,
-        status: int | None = None,
-        reason: str | None = None,
-        charset: str | None = None,
-        headers: Mapping[str, object] | None = None,
-        subtype: str = "mixed",
-        boundary: bytes | str | None = None,
-    ) -> None:
-        super().__init__(
-            content=cast(PartSource, content),
-            status=status,
-            reason=reason,
-            charset=charset,
-            headers=headers,
-            subtype=subtype,
-            boundary=boundary,
-        )
-
-    def make_part(self, content: HTMLPartLike) -> MultipartPart:
-        """Convert an HTML string shorthand or return an explicit part."""
-        if isinstance(content, str):
-            return HTMLPart(content).as_multipart_part()
-
-        if isinstance(content, tuple):
-            if (
-                len(content) != 2
-                or not isinstance(content[0], str)
-                or not isinstance(content[1], Mapping)
-            ):
-                raise TypeError(
-                    "HTMLMultipartResponse tuple items must contain an HTML string and headers"
-                )
-            body, headers = content
-            return HTMLPart(body, headers=headers).as_multipart_part()
-
-        if isinstance(content, Part | MultipartPart | Multipart):
-            return super().make_part(content)
-
-        raise TypeError(
-            "HTMLMultipartResponse items must be str, (str, headers), Part, "
-            f"MultipartPart, or Multipart; got {type(content).__name__}"
-        )
-
-
 __all__ = [
-    "HTMLMultipartResponse",
-    "HTMLPart",
     "JSONPart",
     "Multipart",
     "MultipartResponse",
     "Part",
-    "TextPart",
 ]

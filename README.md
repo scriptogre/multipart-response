@@ -52,18 +52,30 @@ Install the Django adapter:
 uv add "multipart-response[django]"
 ```
 
-Return a multipart response from a view:
+Return explicit parts from a view:
 
 ```python
-from multipart_response.django import HTMLMultipartResponse
+from multipart_response.django import MultipartResponse, Part
 
 
 def updates(request):
     def parts():
-        yield "<p>Ready</p>"
-        yield "<p>Done</p>"
+        yield Part("<p>Ready</p>")
+        yield Part("<p>Done</p>")
 
-    return HTMLMultipartResponse(parts())
+    return MultipartResponse(parts())
+```
+
+`Part` uses Django's `content`, `content_type`, `charset`, and `headers` conventions. HTML is the default content type, as it is for Django's `HttpResponse`.
+
+Set headers on one part through its constructor or `headers`:
+
+```python
+part = Part(
+    "<p>Ready</p>",
+    headers={"HX-Target": "#status"},
+)
+part.headers["HX-Swap"] = "innerHTML"
 ```
 
 Use an async part source when Django runs under ASGI:
@@ -71,24 +83,13 @@ Use an async part source when Django runs under ASGI:
 ```python
 async def updates(request):
     async def parts():
-        yield "<p>Ready</p>"
-        yield "<p>Done</p>"
+        yield Part("<p>Ready</p>")
+        yield Part("<p>Done</p>")
 
-    return HTMLMultipartResponse(parts())
+    return MultipartResponse(parts())
 ```
 
-Django parts use Django response conventions:
-
-```python
-from multipart_response.django import HTMLPart
-
-part = HTMLPart("<p>Ready</p>")
-part["HX-Target"] = "#status"
-part.headers["HX-Swap"] = "innerHTML"
-part.set_cookie("seen", "yes")
-```
-
-`Part` binds Django's header, charset, and cookie methods directly. `JSONPart` uses `JsonResponse`, including `DjangoJSONEncoder` and `safe=True`.
+`MultipartResponse` subclasses Django's [`StreamingHttpResponse`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.StreamingHttpResponse), so Django handles it like any other streaming response.
 
 Django 4.2 or later is required. Sync iterators suit WSGI. Async iterators suit ASGI.
 
@@ -102,8 +103,6 @@ async def dashboard():
     yield ("<p>Ready</p>", {"HX-Target": "#status"})
     yield ("<li>New</li>", {"HX-Target": "#reports", "HX-Swap": "beforeend"})
 ```
-
-The same shorthand works with Django's `HTMLMultipartResponse`.
 
 ## Other part types
 
@@ -120,7 +119,7 @@ async def report():
     yield Multipart([...], subtype="alternative")
 ```
 
-Import the Django versions from `multipart_response.django`. Django's `Part` uses `content_type` instead of `media_type`.
+Django's `Part` uses `content_type` instead of `media_type`. Use `JSONPart` for Django's `JsonResponse` serialization rules.
 
 ## Notes
 
