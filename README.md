@@ -238,15 +238,13 @@ A sequence is buffered. A sync or async iterable streams.
 
 ## htmx
 
-The [`hx-multipart`](https://four.htmx.org/extensions/hx-multipart) extension lets one htmx request process a streaming `multipart/mixed` response. As each part arrives, its body and `HX-*` headers can swap HTML, fire events, or run other htmx response actions.
+The [`hx-multipart`](https://four.htmx.org/extensions/hx-multipart) extension swaps each part as it arrives.
 
-![The hx-multipart extension documentation](https://raw.githubusercontent.com/scriptogre/multipart-response/main/docs/hx-multipart.png)
+<img src="https://raw.githubusercontent.com/scriptogre/multipart-response/main/docs/hx-multipart.png" alt="The hx-multipart extension documentation" width="720">
 
-The extension vendors [`fetch-multipart`](https://github.com/scriptogre/fetch-multipart), which adds `Response.prototype.parts()` and exposes each MIME part as a streaming Fetch-style `BodyPart`. `multipart-response` writes the parts on the server; `hx-multipart` parses and handles them in the browser.
+Use [`HX-Target`, `HX-Swap`, and `HX-Select`](https://four.htmx.org/extensions/hx-multipart#hx--headers) to control each part.
 
-Set `HX-Target` and `HX-Swap` on a part to control its swap.
-
-FastHTML loads htmx 2 by default. Pass `htmx=False` to `fast_app()`, then load htmx 4 and `hx-multipart` as shown in the extension install guide.
+It uses [`fetch-multipart`](https://github.com/scriptogre/fetch-multipart) to parse the stream.
 
 ## Core
 
