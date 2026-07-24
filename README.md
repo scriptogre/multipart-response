@@ -40,10 +40,13 @@ def generate_report(request):
     return MultipartResponse(parts())
 ```
 
-- `Part(content, content_type=..., charset=..., headers=...)` defaults to HTML.
-- `Part.content` contains the rendered content or stream.
-- Parts support Django's header mapping, `has_header()`, `get()`, `setdefault()`, `set_cookie()`, `set_signed_cookie()`, and `delete_cookie()`.
-- `MultipartResponse` accepts `status`, `reason`, `charset`, `headers`, `subtype`, and `boundary`.
+- `Part(...)`
+  - Body: [`content`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.content), [`content_type`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse), and [`charset`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.charset). HTML is the default content type.
+  - Headers: [`headers`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.headers), [`has_header()`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.has_header), [`get()`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.get), and [`setdefault()`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.setdefault).
+  - Cookies: [`set_cookie()`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.set_cookie), [`set_signed_cookie()`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.set_signed_cookie), and [`delete_cookie()`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.delete_cookie).
+- `MultipartResponse(...)`
+  - Response: [`status`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse), [`reason`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.reason_phrase), [`charset`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.charset), and [`headers`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.HttpResponse.headers).
+  - Multipart: [`subtype`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1) and [`boundary`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1.1).
 
 Use an async part source under ASGI:
 
@@ -88,9 +91,16 @@ async def updates():
     yield Part(chunk_stream(), media_type="video/mp4")
 ```
 
-- `Part(content, headers=..., media_type=...)` exposes `headers`, `set_cookie()`, and `delete_cookie()`.
-- `MultipartResponse` accepts `status_code`, `headers`, `subtype`, `background`, and `boundary`.
-- Return `MultipartResponse([...])` directly to set outer response options.
+- `Part(...)`
+  - Body: [`content`](https://fastapi.tiangolo.com/advanced/custom-response/#response) and [`media_type`](https://fastapi.tiangolo.com/advanced/custom-response/#response).
+  - Headers: [`headers`](https://fastapi.tiangolo.com/advanced/custom-response/#response).
+  - Cookies: [`set_cookie()`](https://fastapi.tiangolo.com/advanced/response-cookies/) and [`delete_cookie()`](https://www.starlette.io/responses/#delete-cookie).
+- `MultipartResponse(...)`
+  - Response: [`status_code`](https://fastapi.tiangolo.com/advanced/custom-response/#response), [`headers`](https://fastapi.tiangolo.com/advanced/custom-response/#response), and [`background`](https://www.starlette.io/background/).
+  - Multipart: [`subtype`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1) and [`boundary`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1.1).
+- Routing
+  - Use [`response_class`](https://fastapi.tiangolo.com/advanced/custom-response/) to wrap yielded parts.
+  - [Return `MultipartResponse(...)` directly](https://fastapi.tiangolo.com/advanced/response-directly/) to set outer response options.
 
 Stream HTML or JSON values directly when every part has one content type:
 
@@ -106,11 +116,11 @@ async def html_updates():
 
 @app.get("/json-updates", response_class=JSONMultipartResponse)
 async def json_updates():
-    yield {"status": "ready"}
+    yield {"status": "ready"}, {"HX-Target": "#status"}
     yield "done"
 ```
 
-`HTMLMultipartResponse` renders strings as HTML. `JSONMultipartResponse` uses FastAPI's `jsonable_encoder()` before rendering each JSON part.
+`HTMLMultipartResponse` renders strings as HTML. `JSONMultipartResponse` uses FastAPI's [`jsonable_encoder()`](https://fastapi.tiangolo.com/tutorial/encoder/) and sets each part to `application/json`. The final part above contains the JSON string `"done"`, including its quotes.
 
 *`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse), which FastAPI uses for streamed responses.*
 
@@ -138,9 +148,15 @@ def get():
     return MultipartResponse(parts())
 ```
 
-- `Part(component, headers=..., media_type=...)` renders FastHTML components and defaults to HTML.
-- `MultipartResponse` accepts the Starlette response options.
-- Return the response directly so FastHTML does not buffer a sync part source.
+- `Part(...)`
+  - Body: FastHTML [`FT` components](https://fastcore.fast.ai/xml.html#ft), [`content`](https://www.starlette.io/responses/#response), and [`media_type`](https://www.starlette.io/responses/#response). HTML is the default content type.
+  - Headers: [`headers`](https://www.starlette.io/responses/#response).
+  - Cookies: [`set_cookie()`](https://www.starlette.io/responses/#set-cookie) and [`delete_cookie()`](https://www.starlette.io/responses/#delete-cookie).
+- `MultipartResponse(...)`
+  - Response: [`status_code`](https://www.starlette.io/responses/#response), [`headers`](https://www.starlette.io/responses/#response), and [`background`](https://www.starlette.io/background/).
+  - Multipart: [`subtype`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1) and [`boundary`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1.1).
+- Routing
+  - [Return the response directly](https://www.fastht.ml/docs/explains/routes.html) so FastHTML does not buffer a sync part source.
 
 Stream components directly when every part is HTML:
 
@@ -182,8 +198,13 @@ async def updates(request):
     )
 ```
 
-- `Part(content, headers=..., media_type=...)` exposes `headers`, `set_cookie()`, and `delete_cookie()`.
-- `MultipartResponse` accepts `status_code`, `headers`, `subtype`, `background`, and `boundary`.
+- `Part(...)`
+  - Body: [`content`](https://www.starlette.io/responses/#response) and [`media_type`](https://www.starlette.io/responses/#response).
+  - Headers: [`headers`](https://www.starlette.io/responses/#response).
+  - Cookies: [`set_cookie()`](https://www.starlette.io/responses/#set-cookie) and [`delete_cookie()`](https://www.starlette.io/responses/#delete-cookie).
+- `MultipartResponse(...)`
+  - Response: [`status_code`](https://www.starlette.io/responses/#response), [`headers`](https://www.starlette.io/responses/#response), and [`background`](https://www.starlette.io/background/).
+  - Multipart: [`subtype`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1) and [`boundary`](https://www.rfc-editor.org/rfc/rfc2046#section-5.1.1).
 
 Use `HTMLMultipartResponse` to return HTML strings without wrapping each one in `Part`:
 

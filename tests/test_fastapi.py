@@ -4,6 +4,7 @@ import json
 from collections.abc import AsyncIterator
 from datetime import datetime
 
+import pytest
 from conftest import ParsedPart, parse_multipart
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -124,7 +125,7 @@ def test_fastapi_json_response_uses_jsonable_encoder() -> None:
     @app.get("/events", response_class=JSONMultipartResponse)
     async def events() -> AsyncIterator[object]:
         yield Report(created=datetime(2025, 1, 2, 3, 4, 5))
-        yield {"status": "ready"}
+        yield {"status": "ready"}, {"HX-Target": "#status"}
         yield "done"
         yield Part("explicit", media_type="text/plain")
 
@@ -138,7 +139,11 @@ def test_fastapi_json_response_uses_jsonable_encoder() -> None:
             b'{"created":"2025-01-02T03:04:05"}',
         ),
         ParsedPart(
-            [(b"content-length", b"18"), (b"content-type", b"application/json")],
+            [
+                (b"hx-target", b"#status"),
+                (b"content-length", b"18"),
+                (b"content-type", b"application/json"),
+            ],
             b'{"status":"ready"}',
         ),
         ParsedPart(
@@ -160,10 +165,21 @@ def test_json_response_accepts_one_returned_value() -> None:
         JSONMultipartResponse({"status": "mapping"}, boundary="mapping"),
         JSONMultipartResponse("string", boundary="string"),
         JSONMultipartResponse(Report(status="model"), boundary="model"),
+        JSONMultipartResponse(
+            ({"status": "pair"}, {"X-Part": "pair"}),
+            boundary="pair",
+        ),
         JSONMultipartResponse([1, 2], boundary="sequence"),
     ]
 
-    expected = [b'{"status":"mapping"}', b'"string"', b'{"status":"model"}', b"1", b"2"]
+    expected = [
+        b'{"status":"mapping"}',
+        b'"string"',
+        b'{"status":"model"}',
+        b'{"status":"pair"}',
+        b"1",
+        b"2",
+    ]
     bodies: list[bytes] = []
     for response in responses:
         client = TestClient(response)
@@ -176,6 +192,11 @@ def test_json_response_accepts_one_returned_value() -> None:
         )
 
     assert bodies == expected
+
+
+def test_json_response_rejects_non_string_headers() -> None:
+    with pytest.raises(TypeError, match="headers must map strings to strings"):
+        JSONMultipartResponse([({"status": "ready"}, {"X-Part": 1})])
 
 
 def test_fastapi_streams_one_part_body() -> None:
