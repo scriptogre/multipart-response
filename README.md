@@ -17,8 +17,6 @@ Use the adapter for your web framework:
 uv add "multipart-response[django]"
 ```
 
-`MultipartResponse` subclasses Django's native [`StreamingHttpResponse`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.StreamingHttpResponse).
-
 Stream parts from a Django view:
 
 ```python
@@ -60,13 +58,13 @@ async def updates(request):
 
 Django 4.2 or later is required.
 
+*`MultipartResponse` subclasses Django's native [`StreamingHttpResponse`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.StreamingHttpResponse).*
+
 ### FastAPI
 
 ```console
 uv add "multipart-response[fastapi]"
 ```
-
-`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse), which FastAPI uses for streamed responses.
 
 Stream multiple content types from one path operation:
 
@@ -114,13 +112,13 @@ async def json_updates():
 
 `HTMLMultipartResponse` renders strings as HTML. `JSONMultipartResponse` uses FastAPI's `jsonable_encoder()` before rendering each JSON part.
 
+*`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse), which FastAPI uses for streamed responses.*
+
 ### FastHTML
 
 ```console
 uv add "multipart-response[fasthtml]"
 ```
-
-`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse), which FastHTML uses for streamed responses.
 
 Stream FastHTML components from a route:
 
@@ -158,13 +156,13 @@ def get():
     return HTMLMultipartResponse(parts())
 ```
 
+*`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse), which FastHTML uses for streamed responses.*
+
 ### Starlette
 
 ```console
 uv add "multipart-response[starlette]"
 ```
-
-`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse).
 
 Return a Starlette response from an endpoint:
 
@@ -196,6 +194,8 @@ from multipart_response.starlette import HTMLMultipartResponse
 async def html_updates(request):
     return HTMLMultipartResponse(["<p>Ready</p>", "<p>Done</p>"])
 ```
+
+*`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse).*
 
 ## Nested parts
 
