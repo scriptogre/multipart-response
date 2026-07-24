@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import pytest
 from conftest import ParsedPart, parse_multipart
@@ -13,13 +15,29 @@ from starlette.types import Receive, Scope, Send
 from multipart_response import Multipart, MultipartPart
 from multipart_response.starlette import (
     HTMLMultipartResponse,
-    HTMLPart,
-    JSONPart,
     Multipart as StarletteMultipart,
     MultipartResponse,
     Part,
-    TextPart,
 )
+
+
+def TextPart(content: Any) -> Part:
+    return Part(content, media_type="text/plain")
+
+
+def HTMLPart(content: Any) -> Part:
+    return Part(content, media_type="text/html")
+
+
+def JSONPart(content: Any) -> Part:
+    body = json.dumps(
+        content,
+        ensure_ascii=False,
+        allow_nan=False,
+        indent=None,
+        separators=(",", ":"),
+    )
+    return Part(body, media_type="application/json")
 
 
 def get_response(response: MultipartResponse) -> Response:
@@ -68,7 +86,7 @@ def test_part_uses_starlette_rendering_and_headers() -> None:
     assert b"set-cookie: session=value" in part.render_headers()
 
 
-def test_part_convenience_classes() -> None:
+def test_part_explicit_media_types() -> None:
     assert TextPart("héllo").raw_headers == [
         (b"content-length", b"6"),
         (b"content-type", b"text/plain; charset=utf-8"),
@@ -298,6 +316,18 @@ def test_html_response_converts_strings_and_header_pairs() -> None:
     ]
 
 
+def test_html_response_accepts_one_string_or_header_pair() -> None:
+    responses = [
+        HTMLMultipartResponse("<p>One</p>", boundary="one-string"),
+        HTMLMultipartResponse(("<p>Two</p>", {"X-Part": "two"}), boundary="one-pair"),
+    ]
+
+    assert [
+        parse_multipart(get_response(response).content, response.boundary)[0].body
+        for response in responses
+    ] == [b"<p>One</p>", b"<p>Two</p>"]
+
+
 def test_synchronous_html_iterable_streams_implicit_parts() -> None:
     def parts() -> Iterator[str | tuple[str, dict[str, str]]]:
         yield "<p>One</p>"
@@ -473,7 +503,7 @@ def test_part_rejects_conflicting_nested_media_type() -> None:
 
 
 def test_synchronous_iterable_streams_without_content_length() -> None:
-    def parts() -> Iterator[TextPart]:
+    def parts() -> Iterator[Part]:
         yield TextPart("one")
         yield TextPart("two")
 
@@ -485,7 +515,7 @@ def test_synchronous_iterable_streams_without_content_length() -> None:
 
 
 def test_asynchronous_iterable_streams_without_content_length() -> None:
-    async def parts() -> AsyncIterator[JSONPart]:
+    async def parts() -> AsyncIterator[Part]:
         yield JSONPart({"part": 1})
         yield JSONPart({"part": 2})
 

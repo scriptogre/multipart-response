@@ -1,21 +1,22 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 from conftest import ParsedPart, parse_multipart
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 from python_multipart.multipart import parse_options_header
 
 from multipart_response import Multipart, MultipartPart
 from multipart_response.fastapi import (
     HTMLMultipartResponse,
-    HTMLPart,
-    JSONPart,
+    JSONMultipartResponse,
     Multipart as FastAPIMultipart,
     MultipartResponse,
     Part,
-    TextPart,
 )
 from multipart_response.starlette import (
     HTMLMultipartResponse as StarletteHTMLMultipartResponse,
@@ -28,20 +29,17 @@ def test_fastapi_adapter_reexports_starlette_api() -> None:
     assert MultipartResponse is StarletteMultipartResponse
     assert HTMLMultipartResponse is StarletteHTMLMultipartResponse
     assert Part(b"part").body == b"part"
-    assert TextPart("text").body == b"text"
-    assert HTMLPart("<p>html</p>").body == b"<p>html</p>"
-    assert JSONPart({"json": True}).body == b'{"json":true}'
 
 
-def test_fastapi_returns_multipart_response() -> None:
+def test_fastapi_returns_explicit_multipart_response() -> None:
     app = FastAPI()
 
     @app.get("/report")
     async def report() -> MultipartResponse:
         return MultipartResponse(
             [
-                JSONPart({"status": "ready"}),
-                TextPart("Report complete"),
+                Part(json.dumps({"status": "ready"}), media_type="application/json"),
+                Part("Report complete", media_type="text/plain"),
             ],
             boundary="fastapi",
         )
@@ -54,8 +52,8 @@ def test_fastapi_returns_multipart_response() -> None:
     assert options == {b"boundary": b"fastapi"}
     assert parse_multipart(response.content, options[b"boundary"]) == [
         ParsedPart(
-            [(b"content-length", b"18"), (b"content-type", b"application/json")],
-            b'{"status":"ready"}',
+            [(b"content-length", b"19"), (b"content-type", b"application/json")],
+            b'{"status": "ready"}',
         ),
         ParsedPart(
             [
@@ -67,60 +65,117 @@ def test_fastapi_returns_multipart_response() -> None:
     ]
 
 
-def test_fastapi_streams_parts_yielded_by_endpoint() -> None:
+def test_fastapi_streams_explicit_parts_yielded_by_endpoint() -> None:
     app = FastAPI()
 
     @app.get("/report", response_class=MultipartResponse)
     async def report() -> AsyncIterator[Part]:
-        yield TextPart("Preparing report")
-        yield JSONPart({"status": "ready"})
+        yield Part("Preparing report", media_type="text/plain")
+        yield Part('{"status":"ready"}', media_type="application/json")
 
     with TestClient(app) as client:
         response = client.get("/report")
 
-    media_type, options = parse_options_header(response.headers["content-type"])
-    assert media_type == b"multipart/mixed"
+    _, options = parse_options_header(response.headers["content-type"])
     assert [part.body for part in parse_multipart(response.content, options[b"boundary"])] == [
         b"Preparing report",
         b'{"status":"ready"}',
     ]
 
 
-def test_fastapi_streams_html_strings_with_per_part_headers() -> None:
+def test_fastapi_streams_implicit_html_parts() -> None:
     app = FastAPI()
 
     @app.get("/dashboard", response_class=HTMLMultipartResponse)
     async def dashboard() -> AsyncIterator[str | tuple[str, dict[str, str]]]:
         yield "<p>Ready</p>"
-        yield (
-            "<li>New report</li>",
-            {
-                "HX-Target": "#reports",
-                "HX-Swap": "beforeend",
-            },
-        )
+        yield "<li>New report</li>", {"HX-Target": "#reports", "HX-Swap": "beforeend"}
 
     with TestClient(app) as client:
         response = client.get("/dashboard")
 
     _, options = parse_options_header(response.headers["content-type"])
-    parts = parse_multipart(response.content, options[b"boundary"])
-    assert parts[0] == ParsedPart(
-        [
-            (b"content-length", b"12"),
-            (b"content-type", b"text/html; charset=utf-8"),
-        ],
-        b"<p>Ready</p>",
-    )
-    assert parts[1] == ParsedPart(
-        [
-            (b"hx-target", b"#reports"),
-            (b"hx-swap", b"beforeend"),
-            (b"content-length", b"19"),
-            (b"content-type", b"text/html; charset=utf-8"),
-        ],
-        b"<li>New report</li>",
-    )
+    assert parse_multipart(response.content, options[b"boundary"]) == [
+        ParsedPart(
+            [
+                (b"content-length", b"12"),
+                (b"content-type", b"text/html; charset=utf-8"),
+            ],
+            b"<p>Ready</p>",
+        ),
+        ParsedPart(
+            [
+                (b"hx-target", b"#reports"),
+                (b"hx-swap", b"beforeend"),
+                (b"content-length", b"19"),
+                (b"content-type", b"text/html; charset=utf-8"),
+            ],
+            b"<li>New report</li>",
+        ),
+    ]
+
+
+def test_fastapi_json_response_uses_jsonable_encoder() -> None:
+    class Report(BaseModel):
+        created: datetime
+
+    app = FastAPI()
+
+    @app.get("/events", response_class=JSONMultipartResponse)
+    async def events() -> AsyncIterator[object]:
+        yield Report(created=datetime(2025, 1, 2, 3, 4, 5))
+        yield {"status": "ready"}
+        yield "done"
+        yield Part("explicit", media_type="text/plain")
+
+    with TestClient(app) as client:
+        response = client.get("/events")
+
+    _, options = parse_options_header(response.headers["content-type"])
+    assert parse_multipart(response.content, options[b"boundary"]) == [
+        ParsedPart(
+            [(b"content-length", b"33"), (b"content-type", b"application/json")],
+            b'{"created":"2025-01-02T03:04:05"}',
+        ),
+        ParsedPart(
+            [(b"content-length", b"18"), (b"content-type", b"application/json")],
+            b'{"status":"ready"}',
+        ),
+        ParsedPart(
+            [(b"content-length", b"6"), (b"content-type", b"application/json")],
+            b'"done"',
+        ),
+        ParsedPart(
+            [(b"content-length", b"8"), (b"content-type", b"text/plain; charset=utf-8")],
+            b"explicit",
+        ),
+    ]
+
+
+def test_json_response_accepts_one_returned_value() -> None:
+    class Report(BaseModel):
+        status: str
+
+    responses = [
+        JSONMultipartResponse({"status": "mapping"}, boundary="mapping"),
+        JSONMultipartResponse("string", boundary="string"),
+        JSONMultipartResponse(Report(status="model"), boundary="model"),
+        JSONMultipartResponse([1, 2], boundary="sequence"),
+    ]
+
+    expected = [b'{"status":"mapping"}', b'"string"', b'{"status":"model"}', b"1", b"2"]
+    bodies: list[bytes] = []
+    for response in responses:
+        client = TestClient(response)
+        try:
+            result = client.get("/")
+        finally:
+            client.close()
+        bodies.extend(
+            part.body for part in parse_multipart(result.content, response.boundary.encode("ascii"))
+        )
+
+    assert bodies == expected
 
 
 def test_fastapi_streams_one_part_body() -> None:
@@ -150,8 +205,8 @@ def test_fastapi_streams_nested_multipart_parts() -> None:
     async def nested() -> AsyncIterator[Multipart]:
         yield Multipart(
             [
-                TextPart("Plain text"),
-                HTMLPart("<p>HTML</p>"),
+                Part("Plain text", media_type="text/plain"),
+                Part("<p>HTML</p>", media_type="text/html"),
             ],
             subtype="alternative",
             boundary="inner",
@@ -172,27 +227,19 @@ def test_fastapi_streams_nested_multipart_parts() -> None:
     ]
 
 
-def test_fastapi_html_response_accepts_explicit_parts() -> None:
-    app = FastAPI()
-
-    @app.get("/mixed", response_class=HTMLMultipartResponse)
-    async def mixed() -> AsyncIterator[Part | MultipartPart]:
-        yield TextPart("plain")
-        yield JSONPart({"status": "ready"})
-        yield MultipartPart(b"raw", [(b"Content-Type", b"application/custom")])
-
-    with TestClient(app) as client:
-        response = client.get("/mixed")
-
-    _, options = parse_options_header(response.headers["content-type"])
-    assert parse_multipart(response.content, options[b"boundary"]) == [
-        ParsedPart(
-            [(b"content-length", b"5"), (b"content-type", b"text/plain; charset=utf-8")],
-            b"plain",
-        ),
-        ParsedPart(
-            [(b"content-length", b"18"), (b"content-type", b"application/json")],
-            b'{"status":"ready"}',
-        ),
-        ParsedPart([(b"Content-Type", b"application/custom")], b"raw"),
+def test_specialized_responses_accept_raw_parts() -> None:
+    responses = [
+        HTMLMultipartResponse([MultipartPart(b"html")], boundary="html"),
+        JSONMultipartResponse([MultipartPart(b"json")], boundary="json"),
     ]
+
+    for response in responses:
+        client = TestClient(response)
+        try:
+            result = client.get("/")
+        finally:
+            client.close()
+        assert parse_multipart(result.content, response.boundary.encode("ascii"))[0].body in {
+            b"html",
+            b"json",
+        }

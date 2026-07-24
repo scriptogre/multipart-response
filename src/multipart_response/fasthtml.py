@@ -1,31 +1,31 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Iterable, Mapping, Sequence
-from typing import Any, Protocol, TypeAlias, cast
+from collections.abc import Mapping
+from typing import Any
 
 from fastcore.xml import FT, to_xml  # type: ignore[import-untyped]
-from fasthtml.core import JSONResponse as FastHTMLJSONResponse  # type: ignore[import-untyped]
 from starlette.background import BackgroundTask
 
 from .core import Multipart, MultipartPart
 from .starlette import (
     HTMLMultipartResponse as StarletteHTMLMultipartResponse,
-    HTMLPartSource as StarletteHTMLPartSource,
+    MultipartResponse as StarletteMultipartResponse,
     Part as StarlettePart,
     PartStreamSource,
 )
 
 
-class SupportsFT(Protocol):
-    def __ft__(self) -> Any: ...
-
-
-PartLike: TypeAlias = StarlettePart | MultipartPart | Multipart | str | SupportsFT
-PartSource: TypeAlias = Sequence[PartLike] | Iterable[PartLike] | AsyncIterable[PartLike]
-
-
 def _is_fasthtml_content(content: object) -> bool:
     return isinstance(content, FT) or hasattr(content, "__ft__")
+
+
+def _is_header_pair(content: object) -> bool:
+    return (
+        isinstance(content, tuple)
+        and len(content) == 2
+        and (_is_fasthtml_content(content[0]) or isinstance(content[0], str))
+        and isinstance(content[1], Mapping)
+    )
 
 
 class Part(StarlettePart):
@@ -42,29 +42,27 @@ class Part(StarlettePart):
         return super().render(content)
 
 
-class JSONPart(Part):
-    """A JSON part using FastHTML serialization."""
-
-    media_type = "application/json"
-
-    def render(self, content: Any) -> bytes:
-        return cast(bytes, FastHTMLJSONResponse(content).body)
+class MultipartResponse(StarletteMultipartResponse):
+    """A streaming multipart response for FastHTML."""
 
 
-class MultipartResponse(StarletteHTMLMultipartResponse):
-    """A multipart response that renders implicit FastHTML components as HTML."""
+class HTMLMultipartResponse(StarletteHTMLMultipartResponse):
+    """A multipart response that converts implicit FastHTML components to HTML parts."""
 
     def __init__(
         self,
-        content: PartSource,
+        content: Any,
         status_code: int = 200,
         headers: Mapping[str, str] | None = None,
         subtype: str = "mixed",
         background: BackgroundTask | None = None,
         boundary: bytes | str | None = None,
     ) -> None:
+        if _is_fasthtml_content(content) or isinstance(content, str) or _is_header_pair(content):
+            content = [content]
+
         super().__init__(
-            content=cast(StarletteHTMLPartSource, content),
+            content=content,
             status_code=status_code,
             headers=headers,
             subtype=subtype,
@@ -77,12 +75,21 @@ class MultipartResponse(StarletteHTMLMultipartResponse):
         if _is_fasthtml_content(content):
             return Part(content).as_multipart_part()
         if isinstance(content, tuple):
-            raise TypeError("Use Part(content, headers=...) to set FastHTML part headers")
+            if not _is_header_pair(content):
+                raise TypeError(
+                    "HTMLMultipartResponse tuple items must contain HTML content and headers"
+                )
+            body, headers = content
+            if not all(
+                isinstance(name, str) and isinstance(value, str) for name, value in headers.items()
+            ):
+                raise TypeError("HTMLMultipartResponse headers must map strings to strings")
+            return Part(body, headers=headers).as_multipart_part()
         return super().make_part(content)
 
 
 __all__ = [
-    "JSONPart",
+    "HTMLMultipartResponse",
     "Multipart",
     "MultipartResponse",
     "Part",

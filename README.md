@@ -2,41 +2,135 @@
 
 Stream one HTTP response as multiple MIME parts. For Django, FastAPI, FastHTML, and Starlette.
 
-## FastAPI
+## Integrations
+
+Use the adapter for your web framework:
+
+- [Django](#django)
+- [FastAPI](#fastapi)
+- [FastHTML](#fasthtml)
+- [Starlette](#starlette)
+
+### Django
+
+```console
+uv add "multipart-response[django]"
+```
+
+`MultipartResponse` subclasses Django's native [`StreamingHttpResponse`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.StreamingHttpResponse).
+
+Stream parts from a Django view:
+
+```python
+import json
+
+from multipart_response.django import MultipartResponse, Part
+
+
+def updates(request):
+    def parts():
+        part = Part(
+            "Ready",
+            content_type="text/plain",
+            charset="utf-8",
+            headers={"Content-ID": "status"},
+        )
+        part["HX-Target"] = "#status"
+        part.headers["HX-Swap"] = "innerHTML"
+        part.set_cookie("seen", "yes")
+
+        yield part
+        yield Part(json.dumps({"status": "ready"}), content_type="application/json")
+
+    return MultipartResponse(
+        parts(),
+        status=200,
+        reason="OK",
+        headers={"X-Stream": "updates"},
+    )
+```
+
+- `Part(content, content_type=..., charset=..., headers=...)` defaults to HTML.
+- `Part.content` contains the rendered content or stream.
+- Parts support Django's header mapping, `has_header()`, `get()`, `setdefault()`, `set_cookie()`, `set_signed_cookie()`, and `delete_cookie()`.
+- `MultipartResponse` accepts `status`, `reason`, `charset`, `headers`, `subtype`, and `boundary`.
+
+Use an async part source under ASGI:
+
+```python
+async def updates(request):
+    async def parts():
+        yield Part("<p>Ready</p>")
+        yield Part("<p>Done</p>")
+
+    return MultipartResponse(parts())
+```
+
+Django 4.2 or later is required.
+
+### FastAPI
 
 ```console
 uv add "multipart-response[fastapi]"
 ```
 
-Yield HTML shorthand and explicit parts from one path operation:
+`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse), which FastAPI uses for streamed responses.
+
+Stream multiple content types from one path operation:
 
 ```python
+import json
+
 from fastapi import FastAPI
-from multipart_response.fastapi import HTMLMultipartResponse, HTMLPart, JSONPart, Part
+from multipart_response.fastapi import MultipartResponse, Part
 
 app = FastAPI()
 
 
-@app.get("/updates", response_class=HTMLMultipartResponse)
+@app.get("/updates", response_class=MultipartResponse)
 async def updates():
-    yield "<p>Ready</p>"
-    yield HTMLPart("<p>Done</p>", headers={"HX-Target": "#status"})
-    yield JSONPart({"status": "ready"})
+    yield Part("<p>Ready</p>", media_type="text/html")
+    yield Part(
+        json.dumps({"status": "ready"}),
+        media_type="application/json",
+        headers={"HX-Target": "#status"},
+    )
     yield Part(chunk_stream(), media_type="video/mp4")
 ```
 
-- `HTMLMultipartResponse` accepts HTML strings and explicit parts.
 - `Part(content, headers=..., media_type=...)` exposes `headers`, `set_cookie()`, and `delete_cookie()`.
 - `MultipartResponse` accepts `status_code`, `headers`, `subtype`, `background`, and `boundary`.
 - Return `MultipartResponse([...])` directly to set outer response options.
 
-## FastHTML
+Stream HTML or JSON values directly when every part has one content type:
+
+```python
+from multipart_response.fastapi import HTMLMultipartResponse, JSONMultipartResponse
+
+
+@app.get("/html-updates", response_class=HTMLMultipartResponse)
+async def html_updates():
+    yield "<p>Ready</p>"
+    yield "<p>Done</p>", {"HX-Target": "#status"}
+
+
+@app.get("/json-updates", response_class=JSONMultipartResponse)
+async def json_updates():
+    yield {"status": "ready"}
+    yield "done"
+```
+
+`HTMLMultipartResponse` renders strings as HTML. `JSONMultipartResponse` uses FastAPI's `jsonable_encoder()` before rendering each JSON part.
+
+### FastHTML
 
 ```console
 uv add "multipart-response[fasthtml]"
 ```
 
-Return FastHTML components as streamed parts:
+`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse), which FastHTML uses for streamed responses.
+
+Stream FastHTML components from a route:
 
 ```python
 from fasthtml.common import Div, P, fast_app
@@ -48,23 +142,37 @@ app, rt = fast_app()
 @rt("/updates")
 def get():
     def parts():
-        yield P("Ready")
+        yield Part(P("Ready"))
         yield Part(Div("Done"), headers={"HX-Target": "#status"})
 
     return MultipartResponse(parts())
 ```
 
-- `MultipartResponse` renders FastHTML components, HTML strings, and explicit parts.
-- `Part(component, headers=...)` defaults to HTML and sets options on one component.
-- `Part` accepts `media_type`; `JSONPart` uses FastHTML's JSON serialization.
+- `Part(component, headers=..., media_type=...)` renders FastHTML components and defaults to HTML.
 - `MultipartResponse` accepts the Starlette response options.
-- Return the response directly so FastHTML does not buffer the part source.
+- Return the response directly so FastHTML does not buffer a sync part source.
 
-## Starlette
+Stream components directly when every part is HTML:
+
+```python
+from multipart_response.fasthtml import HTMLMultipartResponse
+
+
+def get():
+    def parts():
+        yield P("Ready")
+        yield Div("Done"), {"HX-Target": "#status"}
+
+    return HTMLMultipartResponse(parts())
+```
+
+### Starlette
 
 ```console
 uv add "multipart-response[starlette]"
 ```
+
+`MultipartResponse` subclasses Starlette's native [`StreamingResponse`](https://www.starlette.io/responses/#streamingresponse).
 
 Return a Starlette response from an endpoint:
 
@@ -85,72 +193,30 @@ async def updates(request):
 ```
 
 - `Part(content, headers=..., media_type=...)` exposes `headers`, `set_cookie()`, and `delete_cookie()`.
-- `HTMLMultipartResponse`, `HTMLPart`, `TextPart`, and `JSONPart` provide content shortcuts.
-- `MultipartResponse` subclasses `StreamingResponse` and accepts `status_code`, `headers`, `subtype`, `background`, and `boundary`.
+- `MultipartResponse` accepts `status_code`, `headers`, `subtype`, `background`, and `boundary`.
 
-## Django
-
-```console
-uv add "multipart-response[django]"
-```
-
-Return explicit parts from a Django view:
+Use `HTMLMultipartResponse` to return HTML strings without wrapping each one in `Part`:
 
 ```python
-from multipart_response.django import JsonPart, MultipartResponse, Part
+from multipart_response.starlette import HTMLMultipartResponse
 
 
-def updates(request):
-    def parts():
-        part = Part(
-            "Ready",
-            content_type="text/plain",
-            charset="utf-8",
-            headers={"Content-ID": "status"},
-        )
-        part["HX-Target"] = "#status"
-        part.headers["HX-Swap"] = "innerHTML"
-        part.set_cookie("seen", "yes")
-
-        yield part
-        yield JsonPart({"status": "ready"})
-
-    return MultipartResponse(
-        parts(),
-        status=200,
-        reason="OK",
-        headers={"X-Stream": "updates"},
-    )
+async def html_updates(request):
+    return HTMLMultipartResponse(["<p>Ready</p>", "<p>Done</p>"])
 ```
-
-- `Part(content, content_type=..., charset=..., headers=...)` defaults to HTML.
-- `Part.content` contains the rendered content or stream.
-- Parts support Django's header mapping, `has_header()`, `get()`, `setdefault()`, `set_cookie()`, `set_signed_cookie()`, and `delete_cookie()`.
-- `JsonPart` accepts `encoder`, `safe`, `json_dumps_params`, `content_type`, `charset`, and `headers`.
-- `MultipartResponse` accepts `status`, `reason`, `charset`, `headers`, `subtype`, and `boundary`.
-
-Use an async part source under ASGI:
-
-```python
-async def updates(request):
-    async def parts():
-        yield Part("<p>Ready</p>")
-        yield Part("<p>Done</p>")
-
-    return MultipartResponse(parts())
-```
-
-`MultipartResponse` subclasses Django's [`StreamingHttpResponse`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.StreamingHttpResponse). Django 4.2 or later is required.
 
 ## Nested parts
 
 `MultipartResponse` accepts `Part`, `MultipartPart`, and nested `Multipart` values:
 
 ```python
-from multipart_response.fastapi import HTMLPart, Multipart, TextPart
+from multipart_response.fastapi import Multipart, Part
 
 alternative = Multipart(
-    [TextPart("Plain text"), HTMLPart("<p>HTML</p>")],
+    [
+        Part("Plain text", media_type="text/plain"),
+        Part("<p>HTML</p>", media_type="text/html"),
+    ],
     subtype="alternative",
 )
 ```
@@ -168,10 +234,6 @@ The extension vendors [`fetch-multipart`](https://github.com/scriptogre/fetch-mu
 Set `HX-Target` and `HX-Swap` on a part to control its swap.
 
 FastHTML loads htmx 2 by default. Pass `htmx=False` to `fast_app()`, then load htmx 4 and `hx-multipart` as shown in the extension install guide.
-
-## Compatibility shorthand
-
-The Starlette and FastAPI `HTMLMultipartResponse` classes still accept `(HTML, headers)` tuples. Prefer `HTMLPart(HTML, headers=...)` in new code.
 
 ## Core
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -16,14 +17,12 @@ if not settings.configured:
         SECRET_KEY="test-secret",
     )
 
-from django.core.serializers.json import DjangoJSONEncoder
-from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.test import AsyncClient, Client
 from django.urls import path
 
 from multipart_response import Multipart, MultipartPart
 from multipart_response.django import (
-    JsonPart,
     Multipart as DjangoMultipart,
     MultipartResponse,
     Part,
@@ -182,33 +181,6 @@ def test_part_render_headers_without_normal_headers() -> None:
 
     part.set_cookie("session", "value")
     assert part.render_headers() == b"Set-Cookie: session=value; Path=/\r\n"
-
-
-def test_json_part_uses_django_json_response() -> None:
-    expected = JsonResponse({"when": 1}, headers={"X-Part": "json"})
-    part = JsonPart({"when": 1}, headers={"X-Part": "json"})
-
-    assert part.content == expected.content == b'{"when": 1}'
-    assert list(part.items()) == list(expected.items())
-
-    class Encoder(DjangoJSONEncoder):
-        def encode(self, value: Any) -> str:
-            return '"encoded"'
-
-    custom = JsonPart(
-        [1, 2],
-        encoder=Encoder,
-        safe=False,
-        json_dumps_params={"indent": 2},
-        content_type="application/custom+json",
-        charset="utf-8",
-    )
-    assert custom.content == b'"encoded"'
-    assert custom["Content-Type"] == "application/custom+json"
-    assert custom.charset == "utf-8"
-
-    with pytest.raises(TypeError, match="non-dict objects"):
-        JsonPart([1, 2])
 
 
 def test_django_adapter_reexports_core_multipart() -> None:
@@ -403,7 +375,7 @@ def test_generated_boundary_matches_content_type() -> None:
 def sync_view(request: object) -> MultipartResponse:
     def parts() -> Iterator[Part]:
         yield Part("one")
-        yield JsonPart({"part": 2})
+        yield Part(json.dumps({"part": 2}), content_type="application/json")
 
     return MultipartResponse(parts(), boundary="wsgi")
 
@@ -411,7 +383,7 @@ def sync_view(request: object) -> MultipartResponse:
 async def async_view(request: object) -> MultipartResponse:
     async def parts() -> AsyncIterator[Part]:
         yield Part("one")
-        yield JsonPart({"part": 2})
+        yield Part(json.dumps({"part": 2}), content_type="application/json")
 
     return MultipartResponse(parts(), boundary="asgi")
 

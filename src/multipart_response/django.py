@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import (
     AsyncIterable,
     AsyncIterator,
@@ -12,8 +11,7 @@ from collections.abc import (
 )
 from typing import Any, TypeAlias, cast
 
-from django.core.serializers.json import DjangoJSONEncoder
-from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 
 from .core import Multipart, MultipartPart
 
@@ -151,31 +149,6 @@ class Part:
         return MultipartPart(self.content, raw_headers)
 
 
-class JsonPart(Part):
-    def __init__(
-        self,
-        data: Any,
-        encoder: type[json.JSONEncoder] = DjangoJSONEncoder,
-        safe: bool = True,
-        json_dumps_params: dict[str, Any] | None = None,
-        *,
-        content_type: str = "application/json",
-        charset: str | None = None,
-        headers: Mapping[str, object] | None = None,
-    ) -> None:
-        response = JsonResponse(
-            data,
-            encoder=encoder,
-            safe=safe,
-            json_dumps_params=json_dumps_params,
-            content_type=content_type,
-            charset=charset,
-            headers=headers,
-        )
-        self._adopt_response(response)
-        self.content = response.content
-
-
 PartLike: TypeAlias = Part | MultipartPart | Multipart
 PartSource: TypeAlias = Sequence[PartLike] | Iterable[PartLike] | AsyncIterable[PartLike]
 
@@ -285,7 +258,6 @@ class MultipartResponse(StreamingHttpResponse):
 
 
 __all__ = [
-    "JsonPart",
     "Multipart",
     "MultipartResponse",
     "Part",
