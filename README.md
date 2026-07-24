@@ -1,92 +1,104 @@
 # multipart-response
 
-Stream one HTTP response as multiple parts. For Django, FastAPI, and Starlette.
+Stream one HTTP response as multiple MIME parts. For FastAPI, Starlette, and Django.
 
 ## FastAPI
-
-Install the FastAPI adapter:
 
 ```console
 uv add "multipart-response[fastapi]"
 ```
 
-Yield parts from an endpoint:
+Yield HTML shorthand and explicit parts from one path operation:
 
 ```python
 from fastapi import FastAPI
-from multipart_response.fastapi import HTMLMultipartResponse
+from multipart_response.fastapi import HTMLMultipartResponse, JSONPart, Part
 
 app = FastAPI()
 
+
 @app.get("/updates", response_class=HTMLMultipartResponse)
 async def updates():
-    yield "<p>Ready</p>"
-    yield "<p>Done</p>"
+    yield "<p>Ready</p>", {"HX-Target": "#status"}
+    yield JSONPart({"status": "ready"})
+    yield Part(chunk_stream(), media_type="video/mp4")
 ```
 
-Each part is sent when it is yielded:
+- `HTMLMultipartResponse` accepts HTML strings, `(HTML, headers)`, and explicit parts.
+- `Part(content, headers=..., media_type=...)` exposes `headers`, `set_cookie()`, and `delete_cookie()`.
+- `MultipartResponse` accepts `status_code`, `headers`, `subtype`, `background`, and `boundary`.
+- Return `MultipartResponse([...])` directly to set outer response options.
 
-```http
-Content-Type: multipart/mixed; boundary=multipart-...
+## Starlette
 
---multipart-...
-content-length: 12
-content-type: text/html; charset=utf-8
-
-<p>Ready</p>
---multipart-...
-content-length: 11
-content-type: text/html; charset=utf-8
-
-<p>Done</p>
---multipart-...--
+```console
+uv add "multipart-response[starlette]"
 ```
 
-The same API is available from `multipart_response.starlette`.
+Return a Starlette response from an endpoint:
+
+```python
+from multipart_response.starlette import MultipartResponse, Part
+
+
+async def updates(request):
+    part = Part("Ready", media_type="text/plain", headers={"Content-ID": "status"})
+    part.headers["HX-Target"] = "#status"
+    part.set_cookie("seen", "yes")
+
+    return MultipartResponse(
+        [part],
+        status_code=200,
+        headers={"X-Stream": "updates"},
+    )
+```
+
+- `Part(content, headers=..., media_type=...)` exposes `headers`, `set_cookie()`, and `delete_cookie()`.
+- `HTMLMultipartResponse`, `HTMLPart`, `TextPart`, and `JSONPart` provide content shortcuts.
+- `MultipartResponse` subclasses `StreamingResponse` and accepts `status_code`, `headers`, `subtype`, `background`, and `boundary`.
 
 ## Django
-
-Install the Django adapter:
 
 ```console
 uv add "multipart-response[django]"
 ```
 
-Return explicit parts from a view:
+Return explicit parts from a Django view:
 
 ```python
-from multipart_response.django import MultipartResponse, Part
+from multipart_response.django import JsonPart, MultipartResponse, Part
 
 
 def updates(request):
     def parts():
-        yield Part("<p>Ready</p>")
-        yield Part("<p>Done</p>")
+        part = Part(
+            "Ready",
+            content_type="text/plain",
+            charset="utf-8",
+            headers={"Content-ID": "status"},
+        )
+        part["HX-Target"] = "#status"
+        part.headers["HX-Swap"] = "innerHTML"
+        part.set_cookie("seen", "yes")
 
-    return MultipartResponse(parts())
+        yield part
+        yield JsonPart({"status": "ready"})
+
+    return MultipartResponse(
+        parts(),
+        status=200,
+        reason="OK",
+        headers={"X-Stream": "updates"},
+    )
 ```
 
-`Part` uses Django's `content`, `content_type`, `charset`, and `headers` conventions. HTML is the default content type, as it is for Django's `HttpResponse`.
+- `Part(content, content_type=..., charset=..., headers=...)` defaults to HTML.
+- `Part.content` contains the rendered content or stream.
+- Parts support Django's header mapping, `has_header()`, `get()`, `setdefault()`, `set_cookie()`, `set_signed_cookie()`, and `delete_cookie()`.
+- `JsonPart` accepts `encoder`, `safe`, `json_dumps_params`, `content_type`, `charset`, and `headers`.
+- `MultipartResponse` accepts `status`, `reason`, `charset`, `headers`, `subtype`, and `boundary`.
 
-Set headers on one part through its constructor or `headers`:
-
-```python
-part = Part(
-    "<p>Ready</p>",
-    headers={"HX-Target": "#status"},
-)
-part.headers["HX-Swap"] = "innerHTML"
-```
-
-Serialize Python data with Django's `JsonResponse` rules:
-
-```python
-from multipart_response.django import JsonPart
-
-part = JsonPart({"status": "ready"})
-```
-
-Use an async part source when Django runs under ASGI:
+Use an async part source under ASGI:
 
 ```python
 async def updates(request):
@@ -97,45 +109,34 @@ async def updates(request):
     return MultipartResponse(parts())
 ```
 
-`MultipartResponse` subclasses Django's [`StreamingHttpResponse`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.StreamingHttpResponse), so Django handles it like any other streaming response.
+`MultipartResponse` subclasses Django's [`StreamingHttpResponse`](https://docs.djangoproject.com/en/6.0/ref/request-response/#django.http.StreamingHttpResponse). Django 4.2 or later is required.
 
-Django 4.2 or later is required. Sync iterators suit WSGI. Async iterators suit ASGI.
+## Nested parts
+
+`MultipartResponse` accepts `Part`, `MultipartPart`, and nested `Multipart` values:
+
+```python
+from multipart_response.fastapi import HTMLPart, Multipart, TextPart
+
+alternative = Multipart(
+    [TextPart("Plain text"), HTMLPart("<p>HTML</p>")],
+    subtype="alternative",
+)
+```
+
+A sequence is buffered. A sync or async iterable streams.
 
 ## htmx
 
-With the [hx-multipart](https://four.htmx.org/extensions/hx-multipart) extension, each part is one swap. Part headers pick the target:
+The [hx-multipart](https://four.htmx.org/extensions/hx-multipart) extension swaps each part as it arrives. Set `HX-Target` and `HX-Swap` on that part.
 
-```python
-@app.get("/dashboard", response_class=HTMLMultipartResponse)
-async def dashboard():
-    yield ("<p>Ready</p>", {"HX-Target": "#status"})
-    yield ("<li>New</li>", {"HX-Target": "#reports", "HX-Swap": "beforeend"})
-```
+## Core
 
-## Other part types
+The dependency-free core exports `Multipart`, `MultipartPart`, and `MultipartWriter`.
 
-Use explicit parts when one response mixes content types:
-
-```python
-from multipart_response.fastapi import JSONPart, Multipart, MultipartResponse, Part, TextPart
-
-@app.get("/report", response_class=MultipartResponse)
-async def report():
-    yield TextPart("Preparing")
-    yield JSONPart({"status": "ready"})
-    yield Part(chunk_stream(), media_type="video/mp4")
-    yield Multipart([...], subtype="alternative")
-```
-
-Django's `Part` uses `content_type` instead of `media_type`.
-
-## Notes
-
-- Return `MultipartResponse([...], status_code=..., headers=...)` with FastAPI or Starlette.
-- Return `MultipartResponse([...], status=..., reason=..., headers=...)` with Django.
-- The dependency-free core exports `Multipart`, `MultipartPart`, and `MultipartWriter`.
-- Boundaries and headers are validated against RFC 2046 limits.
+- Boundaries and MIME headers are validated against RFC 2046 limits.
 - Body chunks are checked for boundary collisions.
+- Static, streamed, and nested multipart content is supported.
 
 ## License
 

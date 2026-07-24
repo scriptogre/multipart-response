@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multipart-response"
-version = "0.4.0"
+version = "0.4.1"
 description = "Stream one HTTP response as multiple parts. For Django, FastAPI, and Starlette."
 readme = "README.md"
 license = "BSD-3-Clause"
