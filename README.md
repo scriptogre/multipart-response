@@ -22,32 +22,24 @@ uv add "multipart-response[django]"
 Stream parts from a Django view:
 
 ```python
-import json
-
 from multipart_response.django import MultipartResponse, Part
 
 
-def updates(request):
+def generate_report(request):
     def parts():
-        part = Part(
-            "Ready",
-            content_type="text/plain",
-            charset="utf-8",
-            headers={"Content-ID": "status"},
+        yield Part(
+            "<p>Generating report...</p>",
+            headers={"HX-Target": "#status"},
         )
-        part["HX-Target"] = "#status"
-        part.headers["HX-Swap"] = "innerHTML"
-        part.set_cookie("seen", "yes")
+        yield Part(
+            '<li><a href="/reports/42">Quarterly report</a></li>',
+            headers={
+                "HX-Target": "#reports",
+                "HX-Swap": "beforeend",
+            },
+        )
 
-        yield part
-        yield Part(json.dumps({"status": "ready"}), content_type="application/json")
-
-    return MultipartResponse(
-        parts(),
-        status=200,
-        reason="OK",
-        headers={"X-Stream": "updates"},
-    )
+    return MultipartResponse(parts())
 ```
 
 - `Part(content, content_type=..., charset=..., headers=...)` defaults to HTML.
