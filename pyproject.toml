@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "multipart-response"
 version = "0.4.1"
-description = "Stream one HTTP response as multiple parts. For Django, FastAPI, and Starlette."
+description = "Stream one HTTP response as multiple parts. For Django, FastAPI, FastHTML, and Starlette."
 readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "Christian Tanul", email = "git@christiantanul.com" },
 ]
-keywords = ["multipart", "streaming", "http", "response", "django", "fastapi", "starlette", "htmx"]
+keywords = ["multipart", "streaming", "http", "response", "django", "fastapi", "fasthtml", "starlette", "htmx"]
 classifiers = [
     "Framework :: Django",
     "Framework :: Django :: 4.2",
@@ -42,6 +42,9 @@ fastapi = ["fastapi>=0.134.0"]
 django = [
     "django>=4.2",
 ]
+fasthtml = [
+    "python-fasthtml>=0.14.9",
+]
 
 [dependency-groups]
 dev = [
@@ -52,6 +55,7 @@ dev = [
     "mypy>=1.15.0",
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
+    "python-fasthtml>=0.14.9",
     "python-multipart>=0.0.20",
     "ruff>=0.11.0",
     "starlette>=0.37.2",
